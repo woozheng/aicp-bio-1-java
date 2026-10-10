@@ -275,7 +275,7 @@ AICP-BIO-1 由 AICP 协议驱动。
 ```text
 execute(envelop, agent) → envelop
 ```
-- **aicp协议主仓库**：[aicp-bio-1-ts](https://github.com/woozheng/aicp)
+- **aicp协议主仓库**：[aicp](https://github.com/woozheng/aicp)
 
 
 ## 其他实现
