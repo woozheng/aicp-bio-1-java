@@ -301,7 +301,7 @@ AICP Protocol main repository: [aicp](https://github.com/woozheng/aicp)
 ## Other Implementations
 
 - Python: [aicp-bio-1-python](https://github.com/woozheng/aicp-bio-1-python)
-- TypeScript: [aicp-bio-1-typetscript](https://github.com/woozheng/aicp-bio-1-typetscript)
+- TypeScript: [aicp-bio-1-typetscript](https://github.com/woozheng/aicp-bio-1-typescript)
 
 All implementations follow the same protocol.
 
