@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AICP Studio</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/editor/editor.main.css">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,sans-serif;background:#1a1a2e;color:#e0e0e0;height:100vh;display:flex;flex-direction:column}
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;background:#0f3460;font-size:14px;font-weight:bold;flex-shrink:0}
+.topbar span{color:#e94560}
+.quick-links{display:flex;gap:6px;align-items:center}
+.quick-links a,.quick-links button{color:#a0a0a0;text-decoration:none;font-size:11px;padding:4px 10px;background:#16213e;border:none;border-radius:4px;cursor:pointer}
+.quick-links a:hover,.quick-links button:hover{color:#fff;background:#1a1a5e}
+.main{flex:1;display:flex;overflow:hidden}
+.sidebar{width:280px;background:#16213e;display:flex;flex-direction:column;border-right:1px solid #0f3460;flex-shrink:0}
+.project-select{padding:12px;border-bottom:1px solid #0f3460}
+.project-select select{width:100%;padding:8px;background:#0f3460;color:#e0e0e0;border:1px solid #1a1a5e;border-radius:4px}
+.project-select button{width:100%;margin-top:8px;padding:8px;background:#e94560;color:#fff;border:none;border-radius:4px;cursor:pointer}
+.file-tree{flex:1;overflow-y:auto;padding:8px}
+.file-tree .item{padding:4px 8px;cursor:pointer;border-radius:4px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.file-tree .item:hover{background:#0f3460}
+.file-tree .item.dir{color:#e2b714;font-weight:bold}
+.file-tree .item.file{color:#a0a0a0}
+.content{flex:1;display:flex;flex-direction:column}
+.editor-panel{flex:1;display:flex;flex-direction:column}
+.editor-toolbar{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#0f3460;font-size:12px}
+.editor-toolbar span{flex:1;color:#e2b714}
+.editor-toolbar button{padding:4px 12px;background:#e94560;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px}
+#editorContainer{flex:1}
+.status{padding:8px 16px;background:#0f3460;font-size:12px;color:#a0a0a0;flex-shrink:0}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+    <span>🛠 AICP Studio</span>
+    <div class="quick-links">
+        <a href="https://chat.deepseek.com" target="_blank">🔵 DS</a>
+        <a href="https://www.doubao.com/chat" target="_blank">🟢 豆包</a>
+        <a href="https://tongyi.aliyun.com" target="_blank">🟡 千问</a>
+        <a href="https://claude.ai" target="_blank">🟣 Claude</a>
+        <a href="https://kimi.moonshot.cn" target="_blank">⚪ Kimi</a>
+        <button onclick="showSaveBookmark()">📌 保存书签</button>
+        <button onclick="copyProtocol()">📡 获取协议</button>
+        <button onclick="previewProject()">👁 预览</button>
+        <button onclick="window.open(ENGINE+'/vision_memory/','_blank')">📸 视觉库</button>
+        <button onclick="logout()">🚪 退出</button>
+    </div>
+</div>
+
+<div class="main">
+    <div class="sidebar">
+        <div class="project-select">
+            <select id="projectSelect" onchange="selectProject(this.value)">
+                <option value="">选择项目...</option>
+            </select>
+            <button onclick="newProject()">➕ 新建项目</button>
+            <button onclick="refreshFileTree()" style="margin-top:4px;">🔄 刷新</button>
+        </div>
+        <div class="file-tree" id="fileTree"></div>
+    </div>
+    <div class="content">
+        <div class="editor-panel">
+            <div class="editor-toolbar">
+                <span id="editorFileName">未打开文件</span>
+                <button onclick="saveFile()">💾 保存</button>
+                <button onclick="deleteFile()">🗑 删除</button>
+            </div>
+            <div id="editorContainer"></div>
+        </div>
+    </div>
+</div>
+<div class="status" id="statusBar">就绪</div>
+
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs/loader.js"></script>
+<script>
+const ENGINE = window.location.origin;
+const API = `${ENGINE}/api/builtins/studio/api`;
+const TOKEN_KEY = 'aicp_studio_token';
+const TOKEN_TIME_KEY = 'aicp_studio_token_time';
+const TOKEN_EXPIRE_HOURS = 2;
+let currentProject = '';
+let currentFile = null;
+let editor = null;
+
+// Token
+function getToken() { const t=localStorage.getItem(TOKEN_KEY),m=localStorage.getItem(TOKEN_TIME_KEY); if(!t||!m)return null; if(Date.now()-parseInt(m)>TOKEN_EXPIRE_HOURS*3600000){clearToken();return null;} return t; }
+function setToken(t) { localStorage.setItem(TOKEN_KEY,t); localStorage.setItem(TOKEN_TIME_KEY,Date.now().toString()); }
+function clearToken() { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(TOKEN_TIME_KEY); localStorage.removeItem('aicp_current_project'); }
+function promptToken() {
+    const s=getToken(); const t=prompt(s?'Token 已过期或无效，请重新输入（取消将退出）:':'请输入 Studio Token（取消将退出）:',s||'');
+    if(t===null||!t.trim()){clearToken();document.body.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100vh;background:#1a1a2e;color:#e94560;font-size:18px;font-family:sans-serif;">👋 已退出，请关闭页面</div>';throw new Error('未授权');}
+    setToken(t.trim()); return t.trim();
+}
+function logout(){clearToken();document.body.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100vh;background:#1a1a2e;color:#e94560;font-size:18px;font-family:sans-serif;">👋 已退出，请关闭页面</div>';}
+
+let STUDIO_TOKEN = getToken();
+if(!STUDIO_TOKEN) STUDIO_TOKEN=promptToken();
+if(!STUDIO_TOKEN) throw new Error('未授权');
+
+// API
+async function api(action, data={}) {
+    const h={'Content-Type':'application/json'}; const c=document.cookie.match(/aicp_token=([^;]+)/); if(c)h['Cookie']='aicp_token='+c[1];
+    const r=await fetch(API,{method:'POST',headers:h,body:JSON.stringify({action,token:STUDIO_TOKEN,...data})});
+    const j=await r.json();
+    if(j.error==='无权限'){clearToken();STUDIO_TOKEN=promptToken();if(!STUDIO_TOKEN)return{error:'未授权'};return api(action,data);}
+    return j;
+}
+
+// 书签
+function showSaveBookmark(){
+    const key = STUDIO_TOKEN || prompt('请先输入 Studio Token 以生成书签:');
+    if (!key) return;
+    setToken(key);
+    STUDIO_TOKEN = key;
+    
+    const c=`javascript:(function(){const T='${key}';let P=localStorage.getItem('aicp_save_project')||'';const p=prompt('保存到项目（留空存入缓存区）:',P);if(p===null)return;if(p)localStorage.setItem('aicp_save_project',p);const c=document.cookie.match(/aicp_token=([^;]+)/);const h={'Content-Type':'application/json'};if(c)h['Cookie']='aicp_token='+c[1];navigator.clipboard.readText().then(t=>{fetch('${ENGINE}/api/builtins/studio/api',{method:'POST',headers:h,body:JSON.stringify({action:'save_blocks',text:t,app_id:p,token:T})}).then(r=>r.json()).then(d=>{if(d.ok){try{const bc=new BroadcastChannel('aicp_studio');bc.postMessage({type:'refresh'});bc.close();}catch(e){}alert('✅ 已保存 '+(d.count||0)+' 个文件到 '+(p||'缓存区')+'\\n'+((d.saved||[]).join('\\n')||''));}else{alert('❌ 保存失败: '+(d.error||'未知错误'))}}).catch(e=>alert('❌ 网络错误: '+e.message))})})();`;
+    const ta=document.createElement('textarea');
+    ta.value=c;ta.style.position='fixed';ta.style.left='-9999px';
+    document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
+    alert('保存书签代码已复制！\n\n1. 浏览器新建书签\n2. 名称填 "AICP保存"\n3. 网址粘贴刚才复制的内容\n\n之后在任何 AI 网页上：\nCtrl+A → Ctrl+C → 点书签 → 选择项目 → 自动保存');
+}
+// 协议
+async function copyProtocol(){
+    try{const d=await api('get_protocol');if(d.protocol){await navigator.clipboard.writeText(d.protocol);document.getElementById('statusBar').textContent='✅ 协议已复制到剪贴板';alert('协议已复制到剪贴板，请粘贴到聊天框发送');}else{alert('协议文件不存在');}}catch(e){alert('获取失败: '+e.message);}
+}
+
+// Monaco
+require.config({paths:{vs:'https://cdn.jsdelivr.net/npm/monaco-editor@0.44.0/min/vs'}});
+require(['vs/editor/editor.main'],function(){editor=monaco.editor.create(document.getElementById('editorContainer'),{value:'',language:'plaintext',theme:'vs-dark',automaticLayout:true,fontSize:13,minimap:{enabled:false}});});
+
+// 项目
+async function loadProjects(){try{const d=await api('list_projects');const s=document.getElementById('projectSelect');s.innerHTML='<option value="">选择项目...</option>';(d.projects||[]).forEach(p=>{s.innerHTML+=`<option value="${p}">${p}</option>`;});}catch(e){}}
+
+async function selectProject(name){currentProject=name;localStorage.setItem('aicp_current_project',name);await refreshFileTree();document.getElementById('statusBar').textContent=name?`📁 当前项目: ${name}`:'就绪';}
+async function newProject(){const n=prompt('项目名称（英文）:');if(!n)return;await api('write_file',{path:`plugins/applications/${n}/app.yaml`,content:`name: ${n}\nversion: 1.0.0\nauto_start: false\ninit_action: init\n`});await api('write_file',{path:`www/${n}/index.html`,content:'<h1>Hello AICP</h1>'});await loadProjects();selectProject(n);}
+
+async function refreshFileTree(){if(!currentProject)return;const t=document.getElementById('fileTree');try{const d=await api('list_files',{app_id:currentProject});t.innerHTML='';['www','plugins'].forEach(s=>{const f=d.tree?.[s]||[];if(!f.length)return;t.innerHTML+=`<div class="item dir" onclick="toggleDir(this)">📂 ${s}/</div>`;const div=document.createElement('div');f.forEach(i=>{const ind=(i.name.split('/').length-1)*12+12;div.innerHTML+=`<div class="item ${i.dir?'dir':'file'}" style="padding-left:${ind}px" onclick="${i.dir?'':'openFile(\''+i.path+'\')'}">${i.dir?'📁':'📄'} ${i.name.split('/').pop()}</div>`;});t.appendChild(div);});if(!d.tree?.www?.length&&!d.tree?.plugins?.length){t.innerHTML='<div style="color:#a0a0a0;padding:12px;">暂无文件</div>';}}catch(e){}}
+function toggleDir(el){const n=el.nextElementSibling;if(n&&n.tagName==='DIV'){n.style.display=n.style.display==='none'?'block':'none';el.textContent=el.textContent.replace(/^[📁📂]/,n.style.display==='none'?'📁':'📂');}}
+
+async function openFile(path){const e=path.split('.').pop().toLowerCase();if(['png','jpg','jpeg','gif','webp','mp4','mp3','wav','zip'].includes(e)){window.open(`${ENGINE}/${currentProject}/${path.split('/').pop()}`,'_blank');return;}try{const d=await api('read_file',{path});const m={py:'python',md:'markdown',yaml:'yaml',yml:'yaml',html:'html',htm:'html',css:'css',js:'javascript',json:'json',xml:'xml',txt:'plaintext'};monaco.editor.setModelLanguage(editor.getModel(),m[e]||'plaintext');editor.setValue(d.content||'');document.getElementById('editorFileName').textContent=path.split('/').pop();currentFile=path;}catch(e){}}
+
+async function saveFile(){if(!currentFile)return;await api('write_file',{path:currentFile,content:editor.getValue()});document.getElementById('statusBar').textContent=`✅ 已保存: ${currentFile}`;}
+async function deleteFile(){if(!currentFile||!confirm('确认删除？'))return;await api('delete_file',{path:currentFile});currentFile=null;editor.setValue('');document.getElementById('editorFileName').textContent='未打开文件';refreshFileTree();}
+
+// 预览
+async function previewProject(){if(!currentProject){alert('请先选择项目');return;}try{const d=await api('list_files',{app_id:currentProject});const w=(d.tree?.www||[]).filter(f=>!f.dir&&f.name.endsWith('.html'));if(!w.length){alert('没有可预览的 HTML 文件');return;}if(w.length===1){window.open(`${ENGINE}/${currentProject}/${w[0].name}`,'_blank');}else{let l='多个预览页面:\n\n';w.forEach((f,i)=>{l+=`${i+1}. ${f.name}\n`;});l+='\n输入序号打开，或输入 0 全部打开:';const c=prompt(l,'1');if(!c)return;const idx=parseInt(c);if(idx===0){w.forEach(f=>window.open(`${ENGINE}/${currentProject}/${f.name}`,'_blank'));}else if(idx>0&&idx<=w.length){window.open(`${ENGINE}/${currentProject}/${w[idx-1].name}`,'_blank');}}}catch(e){alert('获取文件列表失败');}}
+
+// 广播监听
+const bc = new BroadcastChannel('aicp_studio');
+bc.onmessage = (e) => {
+    if (e.data.type === 'refresh') {
+        refreshFileTree();
+        document.getElementById('statusBar').textContent = `📁 当前项目: ${currentProject} | ✅ 文件已更新`;
+    }
+};
+
+loadProjects();
+</script>
+</body>
+</html>

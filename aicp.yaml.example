@@ -1,0 +1,109 @@
+# ============================================================
+# AICP-TS 配置示例
+# 复制为 aicp.yaml 后按需修改
+# ============================================================
+
+# ============================================================
+# 服务监听
+# ============================================================
+# 本地开发用 127.0.0.1；要暴露到局域网用 0.0.0.0
+host: 127.0.0.1
+port: 9000
+
+# ============================================================
+# 目录
+# ============================================================
+static_dir: www
+data_dir: data
+plugins_dir: src/plugins
+
+# ============================================================
+# AICP CLI（Python 桥接）
+# 用于调用 Python 版引擎 / 工具
+# ============================================================
+# 改成你本地的实际路径
+aicp_cli_path: /path/to/aicp-Engin/aicp.py
+python_cmd: python
+aicp_cli_cwd: /path/to/aicp-Engin
+
+# ============================================================
+# WebSocket（端口 = port + 1）
+# ============================================================
+websocket:
+  external_url: ws://127.0.0.1:9001/ws
+
+# ============================================================
+# 文件上传（端口 = port + 2）
+# ============================================================
+upload:
+  external_url: http://127.0.0.1:9002/upload
+
+# ============================================================
+# 认证
+# ============================================================
+# 本地开发可设 false 跳过认证；暴露到网络必须 true
+enable_auth: true
+
+# 有效 token 列表，客户端通过 X-AICP-Token 头携带
+tokens:
+  - change-me-token-1
+  - change-me-token-2
+
+# Web Studio 专用 token
+studio_token: change-me-studio-token
+
+# 默认会话 ID（通常用第一个 token）
+session_id: change-me-token-1
+
+# ============================================================
+# 模型配置
+# ============================================================
+models:
+  # 角色 → 模型 ID 映射
+  # default 必须对应下面 provider 里的某个 model id
+  roles:
+    default: your-default-model
+
+  # 全局参数
+  max_retries: 3
+  request_timeout: 90
+  stream_timeout: 300
+  max_concurrent: 5
+
+  # Provider 列表
+  providers:
+    # ----------------------------------------------------------
+    # 本地/自建 provider（OpenAI 兼容）
+    # ----------------------------------------------------------
+    openai:
+      name: local
+      # 注意：不要和 gateway 的 port 冲突
+      base_url: http://api.example.com/v1
+      type: openai
+      api_key: dummy
+      models:
+        - id: local-model-1
+          max_tokens: 8192
+          temperature: 0.1
+       
+
+    # ----------------------------------------------------------
+    # 远程聚合 provider（API Key 走环境变量）
+    # ----------------------------------------------------------
+    aggregator:
+      base_url: https://api.example.com/v1
+      # 在 .env 里设置 AGGREGATOR_API_KEY
+      api_key: ${AGGREGATOR_API_KEY}
+      models:
+        - id: claude-sonnet-4-6
+          max_tokens: 32768
+          temperature: 0.1
+        - id: doubao-seed-2.0-code
+          max_tokens: 8192
+          temperature: 0.1
+        - id: MiniMax-M3
+          max_tokens: 32768
+          temperature: 0.3
+        - id: mimo-v2.5
+          max_tokens: 32768
+          temperature: 0.8

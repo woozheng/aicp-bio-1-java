@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>AICP · 登录</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, sans-serif;
+  background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+  color: #e0e0e0;
+  min-height: 100vh;
+}
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 30px 24px;
+}
+.hero {
+  text-align: center;
+  margin-bottom: 40px;
+}
+.hero h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  background: linear-gradient(90deg, #e94560, #e2b714);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin-bottom: 8px;
+}
+.hero .subtitle {
+  color: #666;
+  font-size: 0.9rem;
+}
+.badge-row {
+  margin-top: 10px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+}
+.badge-row img {
+  height: 20px;
+  display: block;
+}
+.login-inline {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+  flex-wrap: wrap;
+}
+.login-inline input {
+  width: 260px;
+  padding: 12px 16px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 10px;
+  color: #e0e0e0;
+  font-size: 0.9rem;
+  font-family: 'Consolas', monospace;
+  letter-spacing: 0.15em;
+  text-align: center;
+  outline: none;
+  transition: 0.2s;
+}
+.login-inline input:focus {
+  border-color: #e94560;
+  box-shadow: 0 0 0 3px rgba(233,69,96,0.15);
+}
+.login-inline input::placeholder {
+  color: #555;
+  letter-spacing: 0;
+  font-family: -apple-system, sans-serif;
+}
+.login-inline button {
+  padding: 12px 28px;
+  background: #e94560;
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.2s;
+  white-space: nowrap;
+}
+.login-inline button:hover {
+  background: #c23850;
+  transform: translateY(-1px);
+}
+.error {
+  color: #f87171;
+  font-size: 0.75rem;
+  margin-top: 8px;
+  display: none;
+  text-align: center;
+}
+
+.app-section {
+  margin-top: 30px;
+}
+.app-section h3 {
+  font-size: 0.85rem;
+  color: #666;
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.app-section h3 span {
+  color: #e94560;
+}
+.app-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.app-card {
+  background: rgba(30,30,60,0.5);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 12px;
+  padding: 16px 18px;
+  transition: 0.2s;
+  cursor: pointer;
+}
+.app-card:hover {
+  border-color: #e94560;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px rgba(233,69,96,0.12);
+  background: rgba(30,30,60,0.8);
+}
+.app-card .app-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #e0e0e0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.app-card .app-name .icon {
+  font-size: 1.2rem;
+}
+.app-card .app-desc {
+  font-size: 0.75rem;
+  color: #666;
+  line-height: 1.4;
+  margin-bottom: 8px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.app-card .app-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 0.65rem;
+  color: #666;
+}
+.app-card .app-meta span {
+  background: rgba(255,255,255,0.05);
+  padding: 3px 10px;
+  border-radius: 6px;
+}
+.app-card .page-menu-btn {
+  background: rgba(233,69,96,0.15);
+  border: 1px solid rgba(233,69,96,0.25);
+  color: #e94560;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 0.65rem;
+  cursor: pointer;
+  transition: 0.15s;
+  font-family: inherit;
+}
+.app-card .page-menu-btn:hover {
+  background: rgba(233,69,96,0.3);
+}
+.page-menu-overlay {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 99;
+}
+.page-menu-overlay.show { display: block; }
+.page-menu-dropdown {
+  display: none;
+  position: fixed;
+  z-index: 100;
+  background: #1a1a2e;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px;
+  padding: 6px 0;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.6);
+  min-width: 180px;
+}
+.page-menu-dropdown.show { display: block; }
+.page-menu-dropdown a {
+  display: block;
+  padding: 10px 18px;
+  font-size: 0.8rem;
+  color: #a0a0a0;
+  text-decoration: none;
+  transition: 0.1s;
+}
+.page-menu-dropdown a:hover {
+  background: rgba(233,69,96,0.15);
+  color: #fff;
+}
+.loading-text {
+  color: #666;
+  text-align: center;
+  padding: 30px;
+  font-size: 0.85rem;
+}
+
+.footer {
+  text-align: center;
+  padding: 20px 0 0;
+  color: #444;
+  font-size: 0.65rem;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  margin-top: 30px;
+}
+.footer a {
+  color: #666;
+  text-decoration: none;
+}
+.footer a:hover {
+  color: #e94560;
+}
+
+@media(max-width: 768px) {
+  .container { padding: 20px 16px; }
+  .hero h1 { font-size: 1.5rem; }
+  .login-inline { flex-direction: column; }
+  .login-inline input { width: 100%; }
+  .login-inline button { width: 100%; }
+  .app-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+}
+@media(max-width: 480px) {
+  .app-grid { grid-template-columns: 1fr 1fr; }
+  .app-card { padding: 12px 14px; }
+  .app-card .app-name { font-size: 0.8rem; }
+  .app-card .app-desc { display: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="hero">
+    <h1>⚡ AICP BIO-1</h1>
+    <div class="subtitle">自举、自进化的AI-Agent</div>
+    <div class="badge-row">
+      <img id="backendBadgeImg" src="" alt="" style="height:20px;vertical-align:middle;display:none;">
+    </div>
+    <div class="login-inline">
+      <input type="password" id="tokenInput" placeholder="🔑 访问密钥" autofocus>
+      <button onclick="login()">🚀 进入控制台</button>
+    </div>
+    <div class="error" id="errorMsg">❌ 密钥无效，请重试</div>
+  </div>
+
+  <div class="app-section">
+    <h3>📦 <span>应用广场</span></h3>
+    <div class="app-grid" id="appGrid"><div class="loading-text">加载中...</div></div>
+  </div>
+
+  <div class="footer">
+    AICP Studio · <a href="/">aicp.ai</a>
+  </div>
+</div>
+
+<div class="page-menu-overlay" id="pageMenuOverlay"></div>
+<div class="page-menu-dropdown" id="pageMenuDropdown"></div>
+
+<script>
+// ============================================================
+// 后端感知
+// ============================================================
+
+var BACKEND_INFO = { language: 'unknown', runtime: '', version: '', protocol_version: '', features: [] };
+
+async function detectBackend() {
+    try {
+        var r = await fetch('/api/backend_info', { cache: 'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        BACKEND_INFO = Object.assign(BACKEND_INFO, await r.json());
+    } catch (e) {
+        console.warn('[AICP] detect backend failed:', e);
+    }
+    applyBackendBadge();
+}
+
+function applyBackendBadge() {
+    var img = document.getElementById('backendBadgeImg');
+    if (!img) return;
+
+    var badgeMap = {
+        'java': {
+            src: 'https://img.shields.io/badge/Java-Implementation-orange?style=flat-square&logo=openjdk',
+            alt: 'Java Implementation'
+        },
+        'python': {
+            src: 'https://img.shields.io/badge/Python-Reference_Implementation-blue?style=flat-square&logo=python',
+            alt: 'Python Reference'
+        },
+        'typescript': {
+            src: 'https://img.shields.io/badge/TypeScript-Reference_Implementation-blue?style=flat-square&logo=typescript',
+            alt: 'TypeScript Reference'
+        }
+    };
+
+    var lang = (BACKEND_INFO.language || '').toLowerCase();
+    var badge = badgeMap[lang];
+
+    if (badge) {
+        img.src = badge.src;
+        img.alt = badge.alt;
+        img.title = badge.alt + (BACKEND_INFO.runtime ? ' · ' + BACKEND_INFO.runtime : '');
+        img.style.display = 'inline-block';
+    } else {
+        img.style.display = 'none';
+    }
+
+    console.log('[AICP] Backend:', BACKEND_INFO);
+}
+function login() {
+  var token = document.getElementById('tokenInput').value.trim();
+  if (!token) return;
+  fetch('/api/auth/verify', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-AICP-Token': token }
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.ok) {
+      document.cookie = 'aicp_token=' + token + '; path=/; max-age=2592000';
+      location.href = new URLSearchParams(location.search).get('redirect') || '/';
+    } else {
+      document.getElementById('errorMsg').style.display = 'block';
+    }
+  })
+  .catch(() => { document.getElementById('errorMsg').style.display = 'block'; });
+}
+document.getElementById('tokenInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') login();
+});
+
+function showPageMenu(btn, pages) {
+  var overlay = document.getElementById('pageMenuOverlay');
+  var dropdown = document.getElementById('pageMenuDropdown');
+  var rect = btn.getBoundingClientRect();
+  dropdown.innerHTML = pages.map(function(p) {
+    var pageName = p.path.split('/').pop().replace('.html', '');
+    return '<a href="/' + p.path + '" target="_blank">📄 ' + pageName + '</a>';
+  }).join('');
+  dropdown.style.top = rect.bottom + 4 + 'px';
+  dropdown.style.left = rect.left + 'px';
+  dropdown.style.minWidth = rect.width + 'px';
+  overlay.classList.add('show');
+  dropdown.classList.add('show');
+}
+function hidePageMenu() {
+  document.getElementById('pageMenuOverlay').classList.remove('show');
+  document.getElementById('pageMenuDropdown').classList.remove('show');
+}
+document.getElementById('pageMenuOverlay').addEventListener('click', hidePageMenu);
+
+async function loadAppGallery() {
+  try {
+    var cogRes = await fetch('/api/builtins/agents/cogitor', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action: 'get_map'})
+    });
+    var cogData = await cogRes.json();
+    var plugins = cogData.plugins || {};
+    var appInfoMap = {};
+    for (var key in plugins) {
+      var info = plugins[key];
+      if (!info.is_application) continue;
+      if (info.is_frontend_only || info.has_frontend) {
+        var appName = key.replace('applications/', '').split('/')[0];
+        if (!appInfoMap[appName]) {
+          appInfoMap[appName] = {
+            title: info.frontend_title || info.summary || appName,
+            summary: info.summary || '',
+            is_frontend: info.is_frontend_only || false
+          };
+        }
+      }
+    }
+
+    var pagesResp = await fetch('/api/pages');
+    var pagesData = await pagesResp.json();
+    var allPages = (pagesData.pages || []).filter(function(p) {
+      return p.path !== 'index.html' && p.path !== 'login.html' && p.path.includes('/');
+    });
+
+    var appPageMap = {};
+    allPages.forEach(function(p) {
+      var appName = p.path.split('/')[0];
+      if (!appPageMap[appName]) appPageMap[appName] = [];
+      appPageMap[appName].push(p);
+    });
+
+    var apps = [];
+    for (var name in appPageMap) {
+      var info = appInfoMap[name] || {};
+      var pages = appPageMap[name];
+      var mainPage = pages.find(function(p) { return p.path.endsWith('/index.html'); }) || pages[0];
+      apps.push({
+        name: name,
+        title: info.title && info.title !== 'App' ? info.title : name,
+        desc: info.summary && info.summary !== '?' ? info.summary : '',
+        is_frontend: info.is_frontend || false,
+        url: '/' + mainPage.path,
+        pageCount: pages.length,
+        pages: pages
+      });
+    }
+
+    var grid = document.getElementById('appGrid');
+    if (apps.length === 0) { grid.innerHTML = '<div class="loading-text">暂无应用</div>'; return; }
+
+    grid.innerHTML = apps.map(function(a) {
+      var icon = a.is_frontend ? '🌐' : '📦';
+      return '<div class="app-card" onclick="window.open(\'' + a.url + '\',\'_blank\')">' +
+        '<div class="app-name"><span class="icon">' + icon + '</span>' + a.title + '</div>' +
+        '<div class="app-desc">' + (a.desc || a.name) + '</div>' +
+        '<div class="app-meta">' +
+          '<span>' + a.name + '</span>' +
+          (a.pageCount > 1
+            ? '<button class="page-menu-btn" data-pages=\'' + JSON.stringify(a.pages) + '\'>' + a.pageCount + ' 页 ▾</button>'
+            : '<span>1 页</span>') +
+        '</div>' +
+      '</div>';
+    }).join('');
+
+    document.querySelectorAll('.page-menu-btn').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var pages = JSON.parse(this.getAttribute('data-pages'));
+        showPageMenu(this, pages);
+      });
+    });
+  } catch(e) {
+    document.getElementById('appGrid').innerHTML = '<div class="loading-text">加载失败</div>';
+  }
+}
+// ★ 先探测后端，再加载应用广场
+detectBackend().then(function() {
+    loadAppGallery();
+});
+</script>
+</body>
+</html>

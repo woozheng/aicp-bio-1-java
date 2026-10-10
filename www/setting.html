@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>AICP Engine · 控制面板</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+body{font-family:-apple-system,sans-serif;background:linear-gradient(135deg, #0f0c29, #302b63, #24243e);color:#e0e0e0;display:flex}
+
+.sidebar{width:180px;background:rgba(15,15,30,0.92);backdrop-filter:blur(10px);border-right:1px solid rgba(255,255,255,0.06);display:flex;flex-direction:column;flex-shrink:0;padding-top:12px;z-index:5;overflow-y:auto}
+.sidebar .nav-group-label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:#555;padding:6px 16px 4px}
+.sidebar-item{display:flex;align-items:center;gap:10px;padding:8px 16px;margin:2px 10px;border-radius:8px;cursor:pointer;font-size:13px;color:#888;transition:0.2s;font-weight:500;white-space:nowrap}
+.sidebar-item:hover{background:rgba(233,69,96,0.12);color:#fff}
+.sidebar-item.active{background:rgba(233,69,96,0.18);color:#e94560;font-weight:600}
+.sidebar-item .icon{font-size:16px;width:20px;text-align:center;flex-shrink:0}
+.sidebar .divider{height:1px;background:rgba(255,255,255,0.06);margin:8px 16px}
+
+.main{flex:1;overflow-y:auto;padding:16px 20px;min-width:0}
+.panel{display:none}
+.panel.active{display:block}
+h2{font-size:18px;font-weight:600;color:#e0e0e0;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+h3{font-size:14px;font-weight:600;color:#888;margin-bottom:12px}
+
+.card{background:rgba(30,30,60,0.5);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.05);border-radius:12px;padding:16px;margin-bottom:14px}
+.card-title{font-size:13px;font-weight:600;color:#cbd5e1;margin-bottom:12px;display:flex;align-items:center;gap:8px;justify-content:space-between}
+.card-title .left{display:flex;align-items:center;gap:8px}
+
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.05)}
+th{background:rgba(255,255,255,0.03);font-weight:600;color:#888;font-size:11px;text-transform:uppercase;letter-spacing:0.3px}
+td{color:#cbd5e1}
+
+.btn{padding:6px 14px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);cursor:pointer;font-size:12px;background:transparent;color:#e0e0e0;transition:all 0.15s;font-family:inherit;white-space:nowrap}
+.btn:hover{border-color:#e94560;color:#e94560}
+.btn-primary{background:#e94560;color:#fff;border-color:#e94560}
+.btn-primary:hover{background:#c23850;color:#fff}
+.btn-success{background:rgba(16,185,129,0.15);color:#10b981;border-color:rgba(16,185,129,0.3)}
+.btn-success:hover{background:rgba(16,185,129,0.3);color:#fff}
+.btn-warning{background:rgba(245,158,11,0.15);color:#f59e0b;border-color:rgba(245,158,11,0.3)}
+.btn-warning:hover{background:rgba(245,158,11,0.3);color:#fff}
+.btn-danger{background:rgba(239,68,68,0.15);color:#ef4444;border-color:rgba(239,68,68,0.3)}
+.btn-danger:hover{background:rgba(239,68,68,0.3);color:#fff}
+.btn-sm{padding:4px 10px;font-size:11px}
+
+input,select,textarea{padding:7px 12px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);border-radius:8px;font-size:13px;font-family:inherit;outline:none;color:#e0e0e0;transition:0.15s}
+input:focus,select:focus,textarea:focus{border-color:#e94560;box-shadow:0 0 0 3px rgba(233,69,96,0.1)}
+input::placeholder,textarea::placeholder{color:#555}
+
+.form-row{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.form-row label{font-size:12px;color:#888;min-width:90px;flex-shrink:0}
+.form-row input,.form-row select,.form-row textarea{flex:1;min-width:120px}
+.form-row .short{flex:0 0 120px;min-width:100px}
+
+.tabs{display:flex;gap:4px;margin-bottom:16px;flex-wrap:wrap}
+.tab-btn{padding:7px 16px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.03);cursor:pointer;font-size:12px;border-radius:8px;white-space:nowrap;color:#888;transition:0.15s;font-family:inherit}
+.tab-btn:hover{color:#e0e0e0;border-color:rgba(255,255,255,0.15)}
+.tab-btn.active{background:rgba(233,69,96,0.18);color:#e94560;border-color:rgba(233,69,96,0.3);font-weight:600}
+.tab-content{display:none}
+.tab-content.active{display:block}
+
+.badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:600;letter-spacing:0.3px}
+.badge-env{background:rgba(16,185,129,0.15);color:#10b981}
+.badge-plain{background:rgba(245,158,11,0.15);color:#f59e0b}
+.badge-none{background:rgba(255,255,255,0.05);color:#666}
+.badge-info{background:rgba(99,102,241,0.15);color:#818cf8}
+
+.provider-group{margin-bottom:12px;background:rgba(30,30,60,0.5);border:1px solid rgba(255,255,255,0.05);border-radius:12px;overflow:hidden}
+.provider-header{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;cursor:pointer;user-select:none;transition:0.15s}
+.provider-header:hover{background:rgba(255,255,255,0.03)}
+.provider-body{padding:0 16px 16px;display:none;border-top:1px solid rgba(255,255,255,0.05)}
+.provider-body.open{display:block;padding-top:12px}
+.model-item{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:13px}
+.model-item:last-child{border-bottom:none}
+.code{font-family:monospace;font-size:13px;color:#818cf8}
+
+.role-badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:10px;margin:2px 4px 2px 0;font-weight:600}
+.role-default{background:rgba(129,140,248,0.15);color:#818cf8}
+.role-coding{background:rgba(245,158,11,0.15);color:#f59e0b}
+.role-reasoning{background:rgba(236,72,153,0.15);color:#ec4899}
+.role-image{background:rgba(16,185,129,0.15);color:#10b981}
+
+.empty{text-align:center;padding:30px;color:#555;font-size:13px}
+.spinner{width:20px;height:20px;border:2px solid rgba(255,255,255,0.1);border-top-color:#e94560;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 10px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);justify-content:center;align-items:center;z-index:1000}
+.modal.show{display:flex}
+.modal-content{background:rgba(20,20,40,0.98);border:1px solid rgba(233,69,96,0.3);border-radius:12px;padding:24px;width:550px;max-width:90%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.6)}
+.modal-content h3{color:#e0e0e0;font-size:15px;margin-bottom:16px;font-weight:600}
+
+.help-text{font-size:11px;color:#666;margin-top:4px}
+.error-tag{color:#ef4444;font-size:11px;margin-left:6px}
+
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.15)}
+
+@media(max-width:768px){
+    .sidebar{position:fixed;bottom:0;left:0;right:0;width:100%;height:52px;flex-direction:row;padding:0;border-right:none;border-top:1px solid rgba(255,255,255,0.06);background:rgba(15,15,30,0.96);backdrop-filter:blur(12px);z-index:20;justify-content:space-around;align-items:center;overflow-x:auto}
+    .sidebar-item{flex-direction:column;padding:4px 6px;margin:0;font-size:9px;gap:1px;border-radius:6px;flex:1;justify-content:center;align-items:center;min-height:44px}
+    .sidebar-item .icon{font-size:18px;width:auto;margin:0}
+    .sidebar-item .label{font-size:8px;display:block}
+    .sidebar .divider{display:none}
+    .sidebar .nav-group-label{display:none}
+    .main{padding:12px 10px 64px}
+    .form-row label{min-width:70px;font-size:11px}
+    .modal-content{width:95%;padding:18px}
+}
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+    <div class="nav-group-label">面板</div>
+    <div class="sidebar-item active" data-panel="apps">
+        <span class="icon">📦</span><span class="label">应用</span>
+    </div>
+    <div class="sidebar-item" data-panel="settings">
+        <span class="icon">⚙️</span><span class="label">配置</span>
+    </div>
+    <div class="divider"></div>
+    <div class="nav-group-label">系统</div>
+    <div class="sidebar-item" onclick="location.href='/'">
+        <span class="icon">🏠</span><span class="label">控制台</span>
+    </div>
+</div>
+
+<div class="main">
+
+    <!-- ============ 应用 ============ -->
+    <div id="apps" class="panel active">
+        <h2>📦 应用管理</h2>
+        <div class="card">
+            <table style="table-layout:fixed;width:100%">
+                <thead><tr>
+                    <th style="width:28%">名称</th>
+                    <th style="width:12%">类型</th>
+                    <th style="width:22%">文件</th>
+                    <th style="width:10%">自启动</th>
+                    <th style="width:14%">操作</th>
+                </tr></thead>
+                <tbody id="appsTable"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ============ 配置 ============ -->
+    <div id="settings" class="panel">
+        <h2>⚙️ 系统配置</h2>
+        <div class="tabs">
+            <div class="tab-btn active" data-stab="engine">🌐 引擎</div>
+            <div class="tab-btn" data-stab="models">🤖 模型</div>
+            <div class="tab-btn" data-stab="roles">🎯 角色</div>
+        </div>
+
+        <!-- 引擎配置 -->
+        <div id="engineTab" class="tab-content active">
+            <div class="card">
+                <div class="card-title"><span class="left">🌐 服务器</span></div>
+                <div class="form-row">
+                    <label>host</label><input id="cfgHost" class="short" placeholder="0.0.0.0">
+                    <label>port</label><input id="cfgPort" type="number" class="short" placeholder="9000">
+                </div>
+                <div class="form-row">
+                    <label>static_dir</label><input id="cfgStaticDir" placeholder="www">
+                </div>
+                <div class="form-row">
+                    <label>data_dir</label><input id="cfgDataDir" placeholder="data">
+                </div>
+                <div class="form-row">
+                    <label>plugins_dir</label><input id="cfgPluginsDir" placeholder="plugins">
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title"><span class="left">🔌 WebSocket</span></div>
+                <div class="form-row">
+                    <label>external_url</label><input id="cfgWsUrl" placeholder="ws://127.0.0.1:9001/ws">
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title"><span class="left">🔐 认证</span></div>
+                <div class="form-row">
+                    <label>enable_auth</label>
+                    <select id="cfgEnableAuth" class="short">
+                        <option value="false">关闭</option>
+                        <option value="true">开启</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <label>tokens</label>
+                    <textarea id="cfgTokens" rows="4" placeholder="每行一个 token，例如：&#10;testtoken&#10;workertoken"></textarea>
+                </div>
+                <div class="form-row">
+                    <label>studio_token</label><input id="cfgStudioToken" placeholder="web_studio_token">
+                </div>
+                <div class="form-row">
+                    <label>session_id</label><input id="cfgSessionId" placeholder="testtoken">
+                </div>
+            </div>
+
+            <button class="btn btn-primary" onclick="saveEngineConfig()">💾 保存引擎配置</button>
+        </div>
+
+        <!-- 模型配置 -->
+        <div id="modelsTab" class="tab-content">
+            <div class="card">
+                <div class="card-title"><span class="left">📋 全局参数</span></div>
+                <div class="form-row">
+                    <label>max_retries</label><input id="cfgMaxRetries" type="number" class="short" min="1" max="10">
+                    <label>request_timeout</label><input id="cfgReqTimeout" type="number" class="short" min="10" max="600">
+                </div>
+                <div class="form-row">
+                    <label>stream_timeout</label><input id="cfgStreamTimeout" type="number" class="short" min="10" max="600">
+                    <label>max_concurrent</label><input id="cfgMaxConcurrent" type="number" class="short" min="1" max="50">
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="saveGlobalParams()">保存全局参数</button>
+            </div>
+            <div style="margin-bottom:14px;display:flex;gap:8px">
+                <button class="btn btn-success" onclick="showAddProviderModal()">+ 新增 Provider</button>
+                <button class="btn" onclick="loadModels()">🔄 刷新</button>
+            </div>
+            <div id="modelList"></div>
+        </div>
+
+        <!-- 角色配置 -->
+        <div id="rolesTab" class="tab-content">
+            <div class="card">
+                <div class="card-title"><span class="left">🎯 角色映射</span></div>
+                <p class="help-text" style="margin-bottom:12px">角色决定不同场景使用哪个模型。coding 用于代码生成，reasoning 用于推理，default 用于通用任务。</p>
+                <div class="form-row"><label>default</label><select id="roleDefault"></select><span class="help-text">通用任务</span></div>
+                <div class="form-row"><label>coding</label><select id="roleCoding"></select><span class="help-text">代码生成 (dev_agent)</span></div>
+                <div class="form-row"><label>reasoning</label><select id="roleReasoning"></select><span class="help-text">复杂推理</span></div>
+                <div class="form-row"><label>image</label><select id="roleImage"></select><span class="help-text">多模态/图片</span></div>
+                <button class="btn btn-primary" onclick="saveRoles()">💾 保存角色配置</button>
+            </div>
+            <div class="card" id="rolesPreview" style="font-family:monospace;font-size:12px;white-space:pre-wrap;max-height:200px;overflow-y:auto;color:#818cf8"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Provider Modal -->
+<div id="providerModal" class="modal">
+    <div class="modal-content">
+        <h3 id="providerModalTitle">新增 Provider</h3>
+        <input type="hidden" id="editProviderName">
+        <div class="form-row"><label>名称</label><input id="providerNameInput" placeholder="如: openai"></div>
+        <div class="form-row"><label>base_url</label><input id="providerBaseUrl" placeholder="https://api.openai.com/v1"></div>
+        <div class="form-row"><label>api_key</label><input id="providerApiKey" placeholder="sk-... 或 ${ENV_VAR} 或 none"></div>
+        <p class="help-text" style="margin-top:8px">支持：明文密钥(sk-xxx)、环境变量(${VAR})、无密钥(none)</p>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px">
+            <button class="btn" onclick="closeProviderModal()">取消</button>
+            <button class="btn btn-primary" onclick="saveProvider()">保存</button>
+        </div>
+    </div>
+</div>
+
+<!-- Model Edit Modal -->
+<div id="modelModal" class="modal">
+    <div class="modal-content">
+        <h3 id="modelModalTitle">编辑模型</h3>
+        <input type="hidden" id="editModelPn"><input type="hidden" id="editModelOldId">
+        <div class="form-row"><label>模型 ID</label><input id="editModelId" placeholder="gpt-4"></div>
+        <div class="form-row"><label>max_tokens</label><input id="editModelTokens" type="number" value="4096"></div>
+        <div class="form-row"><label>temperature</label><input id="editModelTemp" type="number" step="0.1" value="0.7"></div>
+        <div class="form-row"><label>role</label>
+            <select id="editModelRole">
+                <option value="">— 不绑定角色 —</option>
+                <option value="default">default</option>
+                <option value="coding">coding</option>
+                <option value="reasoning">reasoning</option>
+                <option value="image">image</option>
+            </select>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px">
+            <button class="btn" onclick="closeModelModal()">取消</button>
+            <button class="btn btn-primary" onclick="saveModel()">保存</button>
+        </div>
+    </div>
+</div>
+
+<script>
+// ==================== API 端点 ====================
+const BASE = '';
+const API_SETTINGS = BASE + '/api/builtins/control/_settings';
+
+// ==================== 全局状态 ====================
+let _providers = {}, _roles = {}, _rawConfig = {}, _allModelIds = [];
+
+// ==================== 导航 ====================
+document.querySelector('.sidebar').addEventListener('click', function(e) {
+    const item = e.target.closest('.sidebar-item');
+    if (!item || !item.dataset.panel) return;
+    switchPanel(item.dataset.panel);
+});
+
+function switchPanel(name) {
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.sidebar-item').forEach(s => s.classList.remove('active'));
+    const panel = document.getElementById(name);
+    if (panel) panel.classList.add('active');
+    const item = document.querySelector(`.sidebar-item[data-panel="${name}"]`);
+    if (item) item.classList.add('active');
+
+    if (name === 'apps') loadApps();
+    if (name === 'settings') { loadEngineConfig(); loadModels(); }
+}
+
+// Settings tabs
+document.getElementById('settingsTabs')?.addEventListener('click', function(e) {
+    const btn = e.target.closest('.tab-btn');
+    if (!btn) return;
+    switchSettingsTab(btn.dataset.stab);
+});
+
+// 兼容：动态绑定 tabs
+document.querySelectorAll('.tabs').forEach(function(tabsEl) {
+    tabsEl.addEventListener('click', function(e) {
+        const btn = e.target.closest('.tab-btn');
+        if (!btn) return;
+        if (btn.dataset.stab) switchSettingsTab(btn.dataset.stab);
+    });
+});
+
+function switchSettingsTab(name) {
+    document.querySelectorAll('#settings .tab-btn').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('#settings .tab-content').forEach(c => c.classList.remove('active'));
+    const btn = document.querySelector(`#settings .tab-btn[data-stab="${name}"]`);
+    if (btn) btn.classList.add('active');
+    const tab = document.getElementById(name + 'Tab');
+    if (tab) tab.classList.add('active');
+    if (name === 'models') loadModels();
+    if (name === 'engine') loadEngineConfig();
+    if (name === 'roles') loadRoles();
+}
+
+// ==================== 应用 ====================
+async function loadApps(){
+    try {
+        const res = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'apps'})});
+        const resp = await res.json();
+        const data = resp.payload || resp.data || resp;
+        const apps = data.apps || [];
+        document.getElementById('appsTable').innerHTML = apps.length ? apps.map(a =>
+            `<tr>
+                <td><strong style="color:#e0e0e0">${a.name||'?'}</strong>${a.error?` <span class="error-tag">⚠️${a.error}</span>`:''}</td>
+                <td>${a.type==='builtin'?'<span class="badge badge-info">系统</span>':'<span class="badge badge-env">用户</span>'}</td>
+                <td style="color:#888">${a.py_files||0} py / ${a.html_files||0} html</td>
+                <td>${a.auto_start?'✅':'—'}</td>
+                <td>${a.deletable?`<button class="btn btn-danger btn-sm" onclick="uninstallApp('${a.id}')">卸载</button>`:'<span style="color:#555">🔒</span>'}</td>
+            </tr>`
+        ).join('') : '<tr><td colspan="5" style="text-align:center;color:#555;padding:30px">暂无应用</td></tr>';
+    } catch(e) { console.error(e); }
+}
+
+async function uninstallApp(id) {
+    if (!confirm(`确定卸载 ${id}？`)) return;
+    await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'uninstall',app_id:id})});
+    loadApps();
+}
+
+// ==================== 引擎配置 ====================
+async function loadEngineConfig(){
+    try {
+        const res = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get'})});
+        const resp = await res.json();
+        const config = resp.payload || resp.data || resp || {};
+
+        document.getElementById('cfgHost').value = config.host || '0.0.0.0';
+        document.getElementById('cfgPort').value = config.port || 9000;
+        document.getElementById('cfgStaticDir').value = config.static_dir || 'www';
+        document.getElementById('cfgDataDir').value = config.data_dir || 'data';
+        document.getElementById('cfgPluginsDir').value = config.plugins_dir || 'plugins';
+        document.getElementById('cfgWsUrl').value = (config.websocket||{}).external_url || 'ws://127.0.0.1:9001/ws';
+        document.getElementById('cfgEnableAuth').value = String(config.enable_auth || false);
+        document.getElementById('cfgTokens').value = (config.tokens || []).join('\n');
+        document.getElementById('cfgStudioToken').value = config.studio_token || '';
+        document.getElementById('cfgSessionId').value = config.session_id || '';
+    } catch(e) { console.error(e); }
+}
+
+async function saveEngineConfig(){
+    const updates = {
+        host: document.getElementById('cfgHost').value||'0.0.0.0',
+        port: parseInt(document.getElementById('cfgPort').value)||9000,
+        static_dir: document.getElementById('cfgStaticDir').value||'www',
+        data_dir: document.getElementById('cfgDataDir').value||'data',
+        plugins_dir: document.getElementById('cfgPluginsDir').value||'plugins',
+        websocket: {external_url: document.getElementById('cfgWsUrl').value},
+        enable_auth: document.getElementById('cfgEnableAuth').value === 'true',
+        tokens: document.getElementById('cfgTokens').value.split('\n').map(s=>s.trim()).filter(Boolean),
+        studio_token: document.getElementById('cfgStudioToken').value,
+        session_id: document.getElementById('cfgSessionId').value
+    };
+    for (const [key, value] of Object.entries(updates)) {
+        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key,value})});
+    }
+    alert('✅ 引擎配置已保存，重启后生效');
+}
+
+// ==================== 模型配置 ====================
+async function loadModels(){
+    try {
+        const res = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get'})});
+        const resp = await res.json();
+        const config = resp.payload || resp.data || resp || {};
+        _rawConfig = JSON.parse(JSON.stringify(config));
+        _providers = config.models?.providers || {};
+        _roles = config.models?.roles || {};
+        _allModelIds = [];
+
+        document.getElementById('cfgMaxRetries').value = config.models?.max_retries || 3;
+        document.getElementById('cfgReqTimeout').value = config.models?.request_timeout || 60;
+        document.getElementById('cfgStreamTimeout').value = config.models?.stream_timeout || 300;
+        document.getElementById('cfgMaxConcurrent').value = config.models?.max_concurrent || 10;
+
+        for (const [pn, p] of Object.entries(_providers)) {
+            for (const m of (p.models || [])) {
+                _allModelIds.push(m.id);
+            }
+        }
+
+        let html = '';
+        for (const [pn, p] of Object.entries(_providers)) {
+            const models = p.models || [], baseUrl = p.base_url || '';
+            const apiKey = p.api_key || '';
+            const isNebula = pn.startsWith('nebula') || apiKey === 'none';
+            let keyBadge = '<span class="badge badge-none">未设置</span>';
+            if (apiKey && apiKey !== 'none') {
+                if (/^\$\{\w+\}$/.test(apiKey)) {
+                    keyBadge = `<span class="badge badge-env">${apiKey}</span>`;
+                } else {
+                    keyBadge = `<span class="badge badge-plain">${apiKey.substring(0,12)}***</span>`;
+                }
+            }
+
+            html += `<div class="provider-group">
+                <div class="provider-header" onclick="this.nextElementSibling.classList.toggle('open')">
+                    <div>
+                        <div style="font-weight:600;color:#e0e0e0;font-size:14px">${isNebula?'🕵️':'📦'} ${pn}</div>
+                        <div style="font-size:11px;color:#666;margin-top:2px">${baseUrl||'-'}</div>
+                        <div style="margin-top:4px">🔑 ${keyBadge}</div>
+                    </div>
+                    <div style="display:flex;gap:6px" onclick="event.stopPropagation()">
+                        <button class="btn btn-sm" onclick="editProvider('${pn}')">编辑</button>
+                        <button class="btn btn-danger btn-sm" onclick="deleteProvider('${pn}')">删除</button>
+                    </div>
+                </div>
+                <div class="provider-body">
+                    ${models.map(m => {
+                        let roleBadges = '';
+                        for (const [role, mid] of Object.entries(_roles)) {
+                            if (mid === m.id) roleBadges += `<span class="role-badge role-${role}">${role}</span>`;
+                        }
+                        return `<div class="model-item">
+                            <div>
+                                <span class="code">${m.id}</span>${roleBadges}
+                                <div style="font-size:11px;color:#666;margin-top:2px">tokens: ${m.max_tokens??'-'} | temp: ${m.temperature??'-'}</div>
+                            </div>
+                            <div style="display:flex;gap:6px">
+                                <button class="btn btn-warning btn-sm" onclick="editModel('${pn}','${m.id}')">编辑</button>
+                                <button class="btn btn-danger btn-sm" onclick="deleteModel('${pn}','${m.id}')">删除</button>
+                            </div>
+                        </div>`;
+                    }).join('')}
+                    <div style="display:flex;gap:8px;margin-top:12px;padding-top:12px;border-top:1px dashed rgba(255,255,255,0.08)">
+                        <input type="text" id="newModelId_${pn}" placeholder="模型 ID" style="flex:1">
+                        <input type="number" id="newModelTokens_${pn}" placeholder="tokens" style="width:90px" value="4096">
+                        <input type="number" step="0.1" id="newModelTemp_${pn}" placeholder="temp" style="width:80px" value="0.7">
+                        <button class="btn btn-primary btn-sm" onclick="quickAddModel('${pn}')">+</button>
+                    </div>
+                </div>
+            </div>`;
+        }
+        if (!Object.keys(_providers).length) html = '<div class="card" style="text-align:center;color:#555;padding:30px">暂无 Provider</div>';
+        document.getElementById('modelList').innerHTML = html;
+        loadRoles();
+    } catch(e) { console.error(e); }
+}
+
+async function saveGlobalParams(){
+    const updates = {
+        'models.max_retries': parseInt(document.getElementById('cfgMaxRetries').value)||3,
+        'models.request_timeout': parseInt(document.getElementById('cfgReqTimeout').value)||60,
+        'models.stream_timeout': parseInt(document.getElementById('cfgStreamTimeout').value)||300,
+        'models.max_concurrent': parseInt(document.getElementById('cfgMaxConcurrent').value)||10,
+    };
+    for (const [key, value] of Object.entries(updates)) {
+        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key,value})});
+    }
+    alert('✅ 全局参数已保存');
+}
+
+async function quickAddModel(pn) {
+    const mid = document.getElementById(`newModelId_${pn}`).value.trim();
+    if (!mid) return alert('请输入模型 ID');
+    const tokens = parseInt(document.getElementById(`newModelTokens_${pn}`).value) || 4096;
+    const temp = parseFloat(document.getElementById(`newModelTemp_${pn}`).value) || 0.7;
+
+    try {
+        const res = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get'})});
+        const data = await res.json();
+        const config = data.payload || data || {};
+        let providers = JSON.parse(JSON.stringify(config.models?.providers || {}));
+
+        if (!providers[pn]) return alert(`Provider "${pn}" 不存在`);
+        if (!providers[pn].models) providers[pn].models = [];
+        if (providers[pn].models.some(m => m.id === mid)) return alert(`模型 "${mid}" 已存在`);
+        providers[pn].models.push({ id: mid, max_tokens: tokens, temperature: temp });
+
+        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.providers',value:providers})});
+        _providers = {};
+        _rawConfig = {};
+        await loadModels();
+        alert(`✅ 模型 "${mid}" 已添加`);
+    } catch (e) {
+        console.error(e);
+        alert('添加失败: ' + e.message);
+    }
+}
+
+async function deleteModel(pn, mid) {
+    if (!confirm(`删除模型 "${mid}"？相关角色引用也会被清理。`)) return;
+    try {
+        const res = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get'})});
+        const data = await res.json();
+        const config = data.payload || data || {};
+        let providers = JSON.parse(JSON.stringify(config.models?.providers || {}));
+        let roles = JSON.parse(JSON.stringify(config.models?.roles || {}));
+
+        if (!providers[pn]) return alert(`Provider "${pn}" 不存在`);
+        providers[pn].models = (providers[pn].models || []).filter(m => m.id !== mid);
+        for (const [role, rid] of Object.entries(roles)) {
+            if (rid === mid) delete roles[role];
+        }
+
+        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.roles',value:roles})});
+        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.providers',value:providers})});
+
+        _providers = {};
+        _rawConfig = {};
+        await loadModels();
+        alert(`✅ 模型 "${mid}" 已删除`);
+    } catch (e) {
+        console.error(e);
+        alert('删除失败: ' + e.message);
+    }
+}
+
+function editModel(pn, mid){
+    const model = (_providers[pn]?.models||[]).find(m=>m.id===mid);
+    if (!model) return;
+    document.getElementById('modelModalTitle').innerText = `编辑模型: ${mid}`;
+    document.getElementById('editModelPn').value = pn;
+    document.getElementById('editModelOldId').value = mid;
+    document.getElementById('editModelId').value = mid;
+    document.getElementById('editModelTokens').value = model.max_tokens || 4096;
+    document.getElementById('editModelTemp').value = model.temperature || 0.7;
+    document.getElementById('editModelRole').value = '';
+    for (const [role, rid] of Object.entries(_roles)) {
+        if (rid === mid) { document.getElementById('editModelRole').value = role; break; }
+    }
+    document.getElementById('modelModal').classList.add('show');
+}
+
+function closeModelModal(){ document.getElementById('modelModal').classList.remove('show'); }
+
+async function saveModel(){
+    const pn = document.getElementById('editModelPn').value;
+    const oldId = document.getElementById('editModelOldId').value;
+    const newId = document.getElementById('editModelId').value.trim();
+    const tokens = parseInt(document.getElementById('editModelTokens').value)||4096;
+    const temp = parseFloat(document.getElementById('editModelTemp').value)||0.7;
+    const role = document.getElementById('editModelRole').value;
+    if (!newId) return alert('请输入模型 ID');
+
+    const res = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get'})});
+    const data = await res.json();
+    const providers = data.payload?.models?.providers || {};
+    const roles = data.payload?.models?.roles || {};
+
+    if (!providers[pn]) return alert('Provider 不存在');
+    const models = providers[pn].models || [];
+    const idx = models.findIndex(m=>m.id===oldId);
+    if (idx === -1) return alert('模型不存在');
+
+    models[idx] = {...models[idx], id: newId, max_tokens: tokens, temperature: temp};
+
+    if (oldId !== newId) {
+        for (const [r, rid] of Object.entries(roles)) {
+            if (rid === oldId) roles[r] = newId;
+        }
+    }
+    if (role) {
+        roles[role] = newId;
+    } else {
+        for (const [r, rid] of Object.entries(roles)) {
+            if (rid === newId) delete roles[r];
+        }
+    }
+
+    providers[pn].models = models;
+    await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.roles',value:roles})});
+    await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.providers',value:providers})});
+    closeModelModal();
+    loadModels();
+}
+
+// ==================== Provider 管理 ====================
+function showAddProviderModal(){
+    document.getElementById('providerModalTitle').innerText='新增 Provider';
+    document.getElementById('editProviderName').value='';
+    document.getElementById('providerNameInput').value=''; document.getElementById('providerNameInput').disabled=false;
+    document.getElementById('providerBaseUrl').value=''; document.getElementById('providerApiKey').value='';
+    document.getElementById('providerModal').classList.add('show');
+}
+
+function editProvider(pn){
+    const rawProviders = _rawConfig.models?.providers || {};
+    const p = rawProviders[pn] || _providers[pn];
+    if (!p) return;
+    document.getElementById('providerModalTitle').innerText='编辑 Provider';
+    document.getElementById('editProviderName').value=pn;
+    document.getElementById('providerNameInput').value=pn; document.getElementById('providerNameInput').disabled=true;
+    document.getElementById('providerBaseUrl').value=p.base_url||'';
+    document.getElementById('providerApiKey').value=p.api_key||'';
+    document.getElementById('providerModal').classList.add('show');
+}
+
+function closeProviderModal(){
+    document.getElementById('providerModal').classList.remove('show');
+    document.getElementById('providerNameInput').disabled=false;
+}
+
+async function saveProvider() {
+    const editName = document.getElementById('editProviderName').value;
+    const name = document.getElementById('providerNameInput').value.trim();
+    if (!name) return alert('请输入名称');
+    const baseUrl = document.getElementById('providerBaseUrl').value.trim();
+    const apiKey = document.getElementById('providerApiKey').value.trim();
+
+    try {
+        const res = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get'})});
+        const data = await res.json();
+        const config = data.payload || data || {};
+        let providers = JSON.parse(JSON.stringify(config.models?.providers || {}));
+
+        if (editName && editName !== name) {
+            if (providers[editName]) {
+                providers[name] = providers[editName];
+                delete providers[editName];
+            }
+        }
+        if (!providers[name]) providers[name] = { models: [] };
+        providers[name].base_url = baseUrl;
+        providers[name].api_key = apiKey;
+
+        const saveRes = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.providers',value:providers})});
+        const saveData = await saveRes.json();
+        if (!saveData.ok && !saveData.payload?.ok) throw new Error(saveData.error || '保存失败');
+
+        closeProviderModal();
+        _providers = {};
+        _rawConfig = {};
+        await loadModels();
+        alert('✅ Provider 已保存');
+    } catch (e) {
+        console.error(e);
+        alert('保存失败: ' + e.message);
+    }
+}
+
+async function deleteProvider(pn) {
+    if (!confirm(`确定要删除 Provider "${pn}" 吗？相关模型和角色引用也会被清理。`)) return;
+    try {
+        const res = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get'})});
+        const data = await res.json();
+        const config = data.payload || data || {};
+        let providers = JSON.parse(JSON.stringify(config.models?.providers || {}));
+        let roles = JSON.parse(JSON.stringify(config.models?.roles || {}));
+
+        if (!providers[pn]) return alert(`Provider "${pn}" 不存在`);
+
+        const providerModels = (providers[pn]?.models || []).map(m => m.id);
+        for (const [role, rid] of Object.entries(roles)) {
+            if (providerModels.includes(rid)) delete roles[role];
+        }
+
+        delete providers[pn];
+
+        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.roles',value:roles})});
+        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.providers',value:providers})});
+
+        _providers = {};
+        _rawConfig = {};
+        _allModelIds = [];
+
+        await loadModels();
+        alert(`✅ Provider "${pn}" 已删除`);
+    } catch (e) {
+        console.error(e);
+        alert('删除失败: ' + e.message);
+    }
+}
+
+// ==================== 角色配置 ====================
+function loadRoles(){
+    const selectIds = ['roleDefault', 'roleCoding', 'roleReasoning', 'roleImage'];
+    const roleKeys = ['default', 'coding', 'reasoning', 'image'];
+
+    for (let i = 0; i < selectIds.length; i++) {
+        const sel = document.getElementById(selectIds[i]);
+        if (!sel) continue;
+        sel.innerHTML = '<option value="">— 不指定 —</option>';
+        for (const mid of _allModelIds) {
+            sel.innerHTML += `<option value="${mid}" ${_roles[roleKeys[i]]===mid?'selected':''}>${mid}</option>`;
+        }
+    }
+    const preview = document.getElementById('rolesPreview');
+    if (preview) preview.textContent = JSON.stringify(_roles, null, 2) || '{}';
+}
+
+async function saveRoles(){
+    const roles = {};
+    const mapping = {roleDefault:'default', roleCoding:'coding', roleReasoning:'reasoning', roleImage:'image'};
+    for (const [elId, roleKey] of Object.entries(mapping)) {
+        const val = document.getElementById(elId).value;
+        if (val) roles[roleKey] = val;
+    }
+    await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.roles',value:roles})});
+    _roles = roles;
+    loadRoles();
+    loadModels();
+    alert('✅ 角色配置已保存');
+}
+
+// ==================== 初始化 ====================
+loadApps();
+loadEngineConfig();
+loadModels();
+</script>
+</body>
+</html>

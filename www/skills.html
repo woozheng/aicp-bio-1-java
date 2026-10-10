@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>技能加载器</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; color: #333; }
+.header { background: #fff; border-bottom: 1px solid #e0e0e0; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+.header h1 { font-size: 20px; font-weight: 600; }
+.header .stats { font-size: 13px; color: #666; }
+.main { display: flex; height: calc(100vh - 65px); }
+.sidebar { width: 240px; background: #fff; border-right: 1px solid #e0e0e0; overflow-y: auto; padding: 16px 0; }
+.sidebar h3 { font-size: 13px; color: #999; padding: 0 16px 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+.cat-item { padding: 8px 16px; cursor: pointer; font-size: 14px; display: flex; justify-content: space-between; align-items: center; }
+.cat-item:hover { background: #f0f0f0; }
+.cat-item.active { background: #e8f0fe; color: #1a73e8; font-weight: 500; }
+.cat-item .cat-count { font-size: 12px; color: #999; background: #f0f0f0; padding: 2px 8px; border-radius: 10px; }
+.cat-item.active .cat-count { background: #fff; color: #1a73e8; }
+.content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.search-bar { padding: 16px 24px; background: #fff; border-bottom: 1px solid #e0e0e0; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.search-bar .mode-tabs { display: flex; gap: 4px; background: #f0f0f0; padding: 3px; border-radius: 6px; }
+.search-bar .mode-tab { padding: 6px 14px; border: none; background: transparent; border-radius: 4px; cursor: pointer; font-size: 13px; color: #666; }
+.search-bar .mode-tab.active { background: #fff; color: #1a73e8; font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+.search-bar input { flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; outline: none; min-width: 200px; }
+.search-bar input:focus { border-color: #1a73e8; }
+.search-bar button { padding: 8px 16px; border: 1px solid #ddd; background: #fff; border-radius: 4px; cursor: pointer; font-size: 14px; }
+.search-bar button:hover { background: #f5f5f5; }
+.search-bar button.primary { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+.search-bar button.primary:hover { background: #1557b0; }
+.search-bar .top-k-select { padding: 7px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; background: #fff; cursor: pointer; }
+.skill-list { flex: 1; overflow-y: auto; padding: 16px 24px; }
+.skill-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 16px; margin-bottom: 12px; cursor: pointer; transition: border-color 0.2s; }
+.skill-card:hover { border-color: #1a73e8; }
+.skill-card .skill-title { font-size: 16px; font-weight: 600; margin-bottom: 6px; color: #222; display: flex; align-items: center; gap: 10px; }
+.skill-card .skill-desc { font-size: 13px; color: #666; line-height: 1.5; margin-bottom: 8px; }
+.skill-card .skill-reason { font-size: 13px; color: #555; line-height: 1.6; margin-bottom: 10px; padding: 10px 12px; background: #f8f9fa; border-left: 3px solid #1a73e8; border-radius: 0 4px 4px 0; }
+.skill-card .skill-reason .reason-label { font-weight: 600; color: #1a73e8; margin-right: 6px; }
+.skill-card .skill-meta { display: flex; gap: 12px; align-items: center; font-size: 12px; color: #999; flex-wrap: wrap; }
+.skill-card .skill-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+.skill-card .tag { background: #f0f0f0; color: #666; padding: 2px 8px; border-radius: 3px; font-size: 11px; }
+.skill-card .skill-cat { color: #1a73e8; }
+.skill-card .score-badge { background: linear-gradient(135deg, #1a73e8, #4285f4); color: #fff; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; margin-left: auto; }
+.empty-state { text-align: center; padding: 60px 20px; color: #999; }
+.empty-state .icon { font-size: 48px; margin-bottom: 16px; }
+.detail-panel { width: 50%; background: #fff; border-left: 1px solid #e0e0e0; overflow-y: auto; display: none; }
+.detail-panel.show { display: block; }
+.detail-header { padding: 20px 24px; border-bottom: 1px solid #e0e0e0; position: sticky; top: 0; background: #fff; z-index: 10; }
+.detail-header .close-btn { float: right; cursor: pointer; font-size: 20px; color: #999; line-height: 1; }
+.detail-header .close-btn:hover { color: #333; }
+.detail-header h2 { font-size: 20px; font-weight: 600; margin-bottom: 8px; padding-right: 30px; }
+.detail-header .detail-meta { font-size: 13px; color: #666; display: flex; gap: 16px; flex-wrap: wrap; }
+.detail-body { padding: 20px 24px; }
+.detail-body pre { background: #f8f9fa; padding: 16px; border-radius: 4px; overflow-x: auto; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-wrap: break-word; font-family: "SFMono-Regular", Consolas, monospace; }
+.detail-body .section-title { font-size: 14px; font-weight: 600; margin: 16px 0 8px; color: #333; }
+.detail-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
+.detail-tags .tag { background: #e8f0fe; color: #1a73e8; padding: 4px 10px; border-radius: 3px; font-size: 12px; }
+.loading { text-align: center; padding: 40px; color: #999; }
+.loading .spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid #e0e0e0; border-top-color: #1a73e8; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 10px; vertical-align: middle; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>技能加载器 v2.0</h1>
+  <div class="stats" id="statsInfo">加载中...</div>
+</div>
+<div class="main">
+  <div class="sidebar">
+    <h3>分类导航</h3>
+    <div id="categoryList"></div>
+  </div>
+  <div class="content">
+    <div class="search-bar">
+      <div class="mode-tabs" id="modeTabs">
+        <button class="mode-tab active" data-mode="recommend">智能推荐</button>
+        <button class="mode-tab" data-mode="search">关键词搜索</button>
+      </div>
+      <input type="text" id="searchInput" placeholder="用自然语言描述你的需求，例如：我想学习Python数据分析..." />
+      <select class="top-k-select" id="topKSelect">
+        <option value="5">Top 5</option>
+        <option value="10" selected>Top 10</option>
+        <option value="20">Top 20</option>
+        <option value="50">Top 50</option>
+      </select>
+      <button class="primary" id="searchBtn">搜索</button>
+      <button id="scanBtn">重新扫描</button>
+    </div>
+    <div class="skill-list" id="skillList">
+      <div class="loading">加载中...</div>
+    </div>
+  </div>
+  <div class="detail-panel" id="detailPanel">
+    <div class="detail-header">
+      <span class="close-btn" id="closeDetail">&times;</span>
+      <h2 id="detailTitle">技能详情</h2>
+      <div class="detail-meta" id="detailMeta"></div>
+    </div>
+    <div class="detail-body" id="detailBody"></div>
+  </div>
+</div>
+
+<script>
+var project = window.location.pathname.split('/')[1];
+var API = '/api/builtins/tools';
+var PLUGIN = 'skill_loader';
+
+var currentCategory = '';
+var currentQuery = '';
+var currentSkillId = '';
+var currentMode = 'recommend';
+var categoryCountMap = {};
+
+async function request(payload) {
+  try {
+    var resp = await fetch(API + '/' + PLUGIN, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({payload: payload})
+    });
+    var rawText = await resp.text();
+    console.log('[API]', payload.action, resp.status, rawText);
+    if (!rawText) return null;
+    var json = JSON.parse(rawText);
+    var data = json.data || json;
+    // 把后端的 ok:false 透传出来，方便 loadSkills 判断
+    return data;
+  } catch (e) {
+    console.error('[API error]', payload.action, e);
+    return null;
+  }
+}
+
+async function refreshAll() {
+  await loadStats();
+  await loadCategories();
+  await loadSkills();
+}
+
+async function loadStats() {
+  var result = await request({action: 'stats'});
+  if (!result) return;
+  var total = result.total_skills || 0;
+  var cats = result.total_categories || 0;
+  var last = result.last_scan || '未扫描';
+  categoryCountMap = result.category_count || {};
+  document.getElementById('statsInfo').textContent = '共 ' + total + ' 个技能 · ' + cats + ' 个分类 · 最后扫描: ' + last;
+}
+
+async function loadCategories() {
+  var result = await request({action: 'categories'});
+  var container = document.getElementById('categoryList');
+  if (!result || !result.categories) {
+    container.innerHTML = '<div style="padding:0 16px;color:#999;font-size:13px;">暂无分类</div>';
+    return;
+  }
+  var cats = result.categories || [];
+  var html = '<div class="cat-item ' + (currentCategory ? '' : 'active') + '" data-cat="">';
+  html += '<span>全部</span><span class="cat-count">' + (getTotalCount()) + '</span></div>';
+  for (var i = 0; i < cats.length; i++) {
+    var cat = cats[i];
+    var cnt = categoryCountMap[cat] || 0;
+    var activeCls = currentCategory === cat ? 'active' : '';
+    html += '<div class="cat-item ' + activeCls + '" data-cat="' + cat + '">';
+    html += '<span>' + cat + '</span><span class="cat-count">' + cnt + '</span></div>';
+  }
+  container.innerHTML = html;
+  var items = container.querySelectorAll('.cat-item');
+  for (var j = 0; j < items.length; j++) {
+    items[j].addEventListener('click', function() {
+      currentCategory = this.getAttribute('data-cat') || '';
+      loadCategories();
+      loadSkills();
+    });
+  }
+}
+
+function getTotalCount() {
+  var total = 0;
+  for (var k in categoryCountMap) {
+    if (categoryCountMap.hasOwnProperty(k)) total += categoryCountMap[k];
+  }
+  return total;
+}
+
+async function loadSkills() {
+  var listEl = document.getElementById('skillList');
+  listEl.innerHTML = '<div class="loading"><span class="spinner"></span>加载中...</div>';
+  var result;
+
+  if (currentQuery) {
+    // 搜索和推荐都走 search，后端 search 内部自带 LLM 精排
+    var topK = parseInt(document.getElementById('topKSelect').value) || 10;
+    result = await request({
+      action: 'search',
+      query: currentQuery,
+      keywords: [currentQuery],
+      category: currentCategory || undefined,
+      limit: currentMode === 'recommend' ? topK : 50
+    });
+  } else {
+    result = await request({action: 'list', category: currentCategory, limit: 100});
+  }
+
+  // 统一处理失败：request() 失败时返回 null，后端业务失败时 ok === false
+  if (!result || result.ok === false) {
+    var errMsg = (result && result.error) || '请求失败，请检查接口';
+    listEl.innerHTML = '<div class="empty-state"><div class="icon">⚠️</div><div>加载失败：' +
+      escapeHtml(errMsg) + '</div></div>';
+    return;
+  }
+
+  var skills = result.skills || result.results || [];
+  if (skills.length === 0) {
+    var emptyTip = currentQuery ? '未找到匹配的技能' : '暂无技能数据';
+    listEl.innerHTML = '<div class="empty-state"><div class="icon">📭</div><div>' + emptyTip + '</div></div>';
+    return;
+  }
+
+  var html = '';
+  for (var i = 0; i < skills.length; i++) {
+    var s = skills[i];
+    var skillId = s.skill_id || '';
+    var title = s.title || s.name || '';
+    var filePath = s.file_path || s.path || '';
+    html += '<div class="skill-card" data-id="' + skillId + '">';
+    html += '<div class="skill-title">';
+    html += '<span>' + escapeHtml(title) + '</span>';
+    if (s.score !== undefined && s.score !== null) {
+      html += '<span class="score-badge">' + s.score + '</span>';
+    }
+    html += '</div>';
+    if (s.reason) {
+      html += '<div class="skill-reason"><span class="reason-label">推荐理由：</span>' + escapeHtml(s.reason) + '</div>';
+    }
+    html += '<div class="skill-desc">' + escapeHtml(s.description || '') + '</div>';
+    html += '<div class="skill-meta">';
+    html += '<span class="skill-cat">' + escapeHtml(s.category || '') + '</span>';
+    if (s.tags && s.tags.length > 0) {
+      html += '<div class="skill-tags">';
+      for (var j = 0; j < s.tags.length; j++) {
+        html += '<span class="tag">' + escapeHtml(s.tags[j]) + '</span>';
+      }
+      html += '</div>';
+    }
+    if (filePath) {
+      html += '<span style="margin-left:auto;">' + escapeHtml(filePath) + '</span>';
+    }
+    html += '</div></div>';
+  }
+  listEl.innerHTML = html;
+
+  var cards = listEl.querySelectorAll('.skill-card');
+  for (var k = 0; k < cards.length; k++) {
+    cards[k].addEventListener('click', function() {
+      var sid = this.getAttribute('data-id');
+      openDetail(sid);
+    });
+  }
+}
+
+async function openDetail(skillId) {
+  if (!skillId) return;
+  currentSkillId = skillId;
+  var panel = document.getElementById('detailPanel');
+  panel.classList.add('show');
+  document.getElementById('detailTitle').textContent = '加载中...';
+  document.getElementById('detailMeta').innerHTML = '';
+  document.getElementById('detailBody').innerHTML = '<div class="loading">加载中...</div>';
+
+  var result = await request({action: 'detail', skill_id: skillId});
+  if (!result || !result.skill_id) {
+    document.getElementById('detailBody').innerHTML = '<div class="empty-state">加载失败</div>';
+    return;
+  }
+
+  document.getElementById('detailTitle').textContent = result.title || '';
+
+  var metaHtml = '<span>分类: ' + escapeHtml(result.category || '') + '</span>';
+  metaHtml += '<span>路径: ' + escapeHtml(result.file_path || '') + '</span>';
+  metaHtml += '<button id="loadSkillBtn" class="primary" style="margin-left:auto;padding:5px 14px;font-size:13px;">加载到当前技能</button>';
+  metaHtml += '<button id="clearSkillBtn" style="margin-left:8px;padding:5px 14px;font-size:13px;">卸载</button>';
+  document.getElementById('detailMeta').innerHTML = metaHtml;
+
+  // 绑定按钮事件
+  document.getElementById('loadSkillBtn').addEventListener('click', function() {
+    loadSkillToCurrent(result.skill_id, result.title);
+  });
+  document.getElementById('clearSkillBtn').addEventListener('click', function() {
+    clearCurrentSkill();
+  });
+
+  var bodyHtml = '';
+  if (result.tags && result.tags.length > 0) {
+    bodyHtml += '<div class="detail-tags">';
+    for (var i = 0; i < result.tags.length; i++) {
+      bodyHtml += '<span class="tag">' + escapeHtml(result.tags[i]) + '</span>';
+    }
+    bodyHtml += '</div>';
+  }
+  bodyHtml += '<div class="section-title">技能描述</div>';
+  bodyHtml += '<p style="color:#555;line-height:1.6;margin-bottom:16px;">' + escapeHtml(result.description || '') + '</p>';
+  bodyHtml += '<div class="section-title">完整内容</div>';
+  bodyHtml += '<pre>' + escapeHtml(result.content || '') + '</pre>';
+  document.getElementById('detailBody').innerHTML = bodyHtml;
+}
+
+// ============================================================
+// 加载 / 卸载 当前技能
+// ============================================================
+function getSessionId() {
+  var match = document.cookie.match(/aicp_token=([^;]+)/);
+  return match ? match[1] : 'default';
+}
+
+async function loadSkillToCurrent(skillId, title) {
+  var btn = document.getElementById('loadSkillBtn');
+  if (!btn) return;
+  var oldText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '加载中...';
+
+  try {
+    var resp = await fetch('/api/builtins/tools/skill_loader', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        payload: {
+          action: 'load',
+          skill_id: skillId,
+          mode: 'load'
+        },
+        meta: { session_id: getSessionId() }
+      })
+    });
+    var rawText = await resp.text();
+    var json = rawText ? JSON.parse(rawText) : {};
+    var data = json.data || json;
+
+    if (data.ok) {
+      btn.textContent = '✅ 已加载';
+      if (data.message) console.log(data.message);
+    } else {
+      btn.textContent = '❌ ' + (data.error || '失败');
+      console.error('load_skill failed:', data);
+    }
+  } catch (e) {
+    btn.textContent = '❌ 请求异常';
+    console.error(e);
+  }
+
+  setTimeout(function() {
+    btn.disabled = false;
+    btn.textContent = oldText;
+  }, 2000);
+}
+
+async function clearCurrentSkill() {
+  var btn = document.getElementById('clearSkillBtn');
+  if (!btn) return;
+  var oldText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '卸载中...';
+
+  try {
+    var resp = await fetch('/api/builtins/tools/skill_loader', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        payload: { action: 'load', mode: 'clear' },
+        meta: { session_id: getSessionId() }
+      })
+    });
+    var rawText = await resp.text();
+    var json = rawText ? JSON.parse(rawText) : {};
+    var data = json.data || json;
+
+    btn.textContent = data.ok ? '✅ 已卸载' : '❌ ' + (data.error || '失败');
+  } catch (e) {
+    btn.textContent = '❌ 请求异常';
+    console.error(e);
+  }
+
+  setTimeout(function() {
+    btn.disabled = false;
+    btn.textContent = oldText;
+  }, 2000);
+}
+function closeDetail() {
+  currentSkillId = '';
+  document.getElementById('detailPanel').classList.remove('show');
+}
+
+function escapeHtml(text) {
+  var div = document.createElement('div');
+  div.appendChild(document.createTextNode(text));
+  return div.innerHTML;
+}
+
+function switchMode(mode) {
+  currentMode = mode;
+  var tabs = document.querySelectorAll('.mode-tab');
+  for (var i = 0; i < tabs.length; i++) {
+    if (tabs[i].getAttribute('data-mode') === mode) {
+      tabs[i].classList.add('active');
+    } else {
+      tabs[i].classList.remove('active');
+    }
+  }
+  var inputEl = document.getElementById('searchInput');
+  var topKEl = document.getElementById('topKSelect');
+  if (mode === 'recommend') {
+    inputEl.placeholder = '用自然语言描述你的需求，例如：我想学习Python数据分析...';
+    topKEl.style.display = 'inline-block';
+  } else {
+    inputEl.placeholder = '搜索技能名称、描述、标签...';
+    topKEl.style.display = 'none';
+  }
+}
+
+function init() {
+  var tabs = document.querySelectorAll('.mode-tab');
+  for (var t = 0; t < tabs.length; t++) {
+    tabs[t].addEventListener('click', function() {
+      switchMode(this.getAttribute('data-mode'));
+    });
+  }
+  document.getElementById('searchBtn').addEventListener('click', function() {
+    currentQuery = document.getElementById('searchInput').value.trim();
+    loadSkills();
+  });
+  document.getElementById('searchInput').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') {
+      currentQuery = this.value.trim();
+      loadSkills();
+    }
+  });
+  document.getElementById('scanBtn').addEventListener('click', async function() {
+    this.textContent = '扫描中...';
+    this.disabled = true;
+    await request({action: 'scan'});
+    this.textContent = '重新扫描';
+    this.disabled = false;
+    refreshAll();
+  });
+  document.getElementById('closeDetail').addEventListener('click', closeDetail);
+  refreshAll();
+}
+
+init();
+</script>
+</body>
+</html>
