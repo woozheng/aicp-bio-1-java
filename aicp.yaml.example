@@ -42,7 +42,7 @@ upload:
 # 认证
 # ============================================================
 # 本地开发可设 false 跳过认证；暴露到网络必须 true
-enable_auth: true
+enable_auth: false
 
 # 有效 token 列表，客户端通过 X-AICP-Token 头携带
 tokens:
@@ -85,7 +85,7 @@ models:
         - id: local-model-1
           max_tokens: 8192
           temperature: 0.1
-       
+
 
     # ----------------------------------------------------------
     # 远程聚合 provider（API Key 走环境变量）
