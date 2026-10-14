@@ -1784,6 +1784,25 @@ class PromptManager {
         经验内容写这里，可以是任意长文本，无需转义
         @@END_CONTENT@@
 
+        search_memory（搜历史记忆，action 在顶层）：
+        {
+          "think": "信息流不够，搜历史记忆",
+          "call": "use_tool",
+          "retain": 3,
+          "args": {"target":"builtins/agents/search_memory","action":"get","params":{"session_id":"__SESSION_ID__","query":"关键词","keywords":["词1","词2"]}}
+        }
+        ⚠️ 使用时机：
+                - 用户问"上次 / 之前 / 过去 / 曾经"发生的事
+                - 用户问某个具体信息（邮箱、地址、账号、网址），当前信息流里没有
+                - 需要还原某个事件经过
+
+                ⚠️ 不要用：
+                - 当前信息流里已有答案 → 直接回答
+                - 简单常识 → LLM 自己知道
+                - 需要"经验规则" → 经验背包已经在 prompt 里了
+
+                ⚠️ keywords 必须给 2-5 个，从用户问题里提取，不能空。
+
         add_task_board（任务看板，content 走 @@CONTENT@@ 块）：
         {
           "think": "更新任务看板",
