@@ -21,7 +21,7 @@ import java.util.stream.Stream;
  *
  * 流程：
  *   1. 解析 target → 项目名
- *   2. ★ 判断是前端修复还是后端修复（关键词）
+ *   2. ★ 让 LLM 判断是前端修复还是后端修复
  *   3a. 前端 → 调 frontend_agent.fix
  *   3b. 后端 → 现有逻辑（fix_design → local/regenerate）
  *   4. 等 2 秒，验证
@@ -31,6 +31,54 @@ public class fix_tool implements Plugin {
     private static final String PROJECTS_DIR = "src/plugins/applications";
     private static final int MAX_BACKEND_SOURCE_CHARS = 30000;
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    // ============================================================
+    // scope 判断 prompt
+    // ============================================================
+
+    private static final String SCOPE_JUDGE_SYSTEM = """
+        你是 AICP 项目的修复需求分类器。你的唯一任务：读修复需求，判断它应该走「前端修复」还是「后端修复」。
+
+        ============================================================
+        判断规则
+        ============================================================
+
+        【后端修复】：
+        - 改 API / action / 参数 / 返回值 / 字段
+        - 改数据源 / 数据库 / 缓存
+        - 改业务逻辑 / 算法
+        - 加校验 / 超时 / 错误处理
+        - 加 @DEPS 依赖
+        - 改 receiver / 路由
+        - 接口协议变化
+
+        【前端修复】：
+        - 改页面布局 / 样式 / 颜色
+        - 改按钮 / 表单 / 输入框
+        - 改交互 / 点击 / 显示
+        - 改 HTML / CSS / JS
+        - 加页面 / 加组件
+
+        【两者都有】：
+        - 需求同时涉及前端和后端
+        - 例：「加搜索功能，后端加搜索接口，前端加搜索框」
+        - 这种优先走后端（后端先改，前端再改）
+
+        ============================================================
+        输出格式（只输出 JSON，不要任何其他文字）
+        ============================================================
+
+        {
+          "scope": "backend",
+          "reason": "为什么这么判断（一句话）"
+        }
+
+        规则：
+        1. scope 只能是 backend / frontend
+        2. 两者都有时，scope=backend
+        3. 不确定时，scope=backend（保守）
+        4. 只输出 JSON，不要代码块标记，不要解释
+        """;
 
     // ============================================================
     // fix_design prompt
@@ -69,10 +117,11 @@ public class fix_tool implements Plugin {
         - 涉及多个文件
         - 现有代码要"重构"才能实现
         - 例：「加流式输出」「加数据库支持」「改成多步骤工作流」
+        - ★ 改数据源（如从本地 JSON 改成 HTTP API）→ regenerate
 
         判断规则：
         - 关键词 local：改 / 调 / 加字段 / 加显示 / 加筛选 / 改文案 / 改顺序 / 改参数
-        - 关键词 regenerate：加流式 / 加推送 / 加认证 / 加数据库 / 加依赖 / 重构 / 重写
+        - 关键词 regenerate：加流式 / 加推送 / 加认证 / 加数据库 / 加依赖 / 重构 / 重写 / 改数据源
 
         不确定时：默认 regenerate（更稳）。
 
@@ -109,7 +158,7 @@ public class fix_tool implements Plugin {
 
         规则：
         1. mode 只能是 local / regenerate
-        2. scope 只能是 backend（前端修复不走此流程）
+        2. scope 只能是 backend
         3. backend_changes[].file 必须是"后端文件摘要"里列出的实际文件名
         4. description 要具体到"改哪个方法 / 哪个字段"
         5. actions_affected 是受影响的 action 名列表
@@ -235,7 +284,6 @@ public class fix_tool implements Plugin {
             return envelop;
         }
 
-        // sessionId
         String sessionId = str(envelop.meta.get("session_id"));
         if (sessionId.isEmpty()) sessionId = str(envelop.payload.get("session_id"));
         if (sessionId.isEmpty()) sessionId = "default";
@@ -252,43 +300,55 @@ public class fix_tool implements Plugin {
         }
 
         // ============================================================
-        // 2. ★ 判断是前端修复还是后端修复
+        // 2. ★ 让 LLM 判断 scope
         // ============================================================
-        boolean isFrontendFix = isFrontendFix(issue, target);
+        String scope = callScopeJudge(llm, projectName, issue);
+        pushProgress(agent, sessionId, "executing", "修复范围：" + scope);
 
-        if (isFrontendFix) {
+        if ("frontend".equals(scope)) {
             return handleFrontendFix(envelop, agent, sessionId, projectName, issue);
         }
 
         // ============================================================
-        // 3. 后端修复（现有逻辑）
+        // 3. 后端修复
         // ============================================================
         return handleBackendFix(envelop, agent, llm, sessionId, projectName, target, issue);
     }
 
     // ============================================================
-    // 前端修复分流
+    // ★ LLM 判断 scope
     // ============================================================
 
-    private boolean isFrontendFix(String issue, String target) {
-        // target 明确指向前端
-        String t = target.toLowerCase();
-        if (t.startsWith("www/") || t.endsWith(".html") || t.contains("/index.html")) {
-            return true;
-        }
+    private String callScopeJudge(LLM llm, String projectName, String issue) {
+        String prompt = "项目名：" + projectName + "\n\n"
+            + "修复需求：\n" + issue;
 
-        // issue 里含前端关键词
-        String lower = issue.toLowerCase();
-        String[] keywords = {
-            "页面", "界面", "前端", "样式", "颜色", "布局", "按钮", "表单",
-            "显示", "渲染", "html", "css", "js", "javascript",
-            "ui", "交互", "点击", "输入框", "列表展示", "前端页面", "网页"
-        };
-        for (String kw : keywords) {
-            if (lower.contains(kw)) return true;
+        try {
+            Map<String, Object> result = llm.chatJson(List.of(
+                Map.of("role", "system", "content", SCOPE_JUDGE_SYSTEM),
+                Map.of("role", "user", "content", prompt)
+            ));
+
+            if (result == null) {
+                System.err.println("[fix_tool] scope judge returned null, default backend");
+                return "backend";
+            }
+
+            String scope = str(result.get("scope")).trim().toLowerCase();
+            if ("frontend".equals(scope)) return "frontend";
+            if ("backend".equals(scope)) return "backend";
+
+            System.err.println("[fix_tool] scope judge returned unknown: " + scope);
+            return "backend";
+        } catch (Throwable t) {
+            System.err.println("[fix_tool] scope judge failed: " + t);
+            return "backend";
         }
-        return false;
     }
+
+    // ============================================================
+    // 前端修复
+    // ============================================================
 
     private Envelop handleFrontendFix(Envelop envelop, Agent agent, String sessionId,
                                        String projectName, String issue) {
@@ -321,7 +381,6 @@ public class fix_tool implements Plugin {
                 data.put("frontend_url", "/" + projectName + "/");
                 data.put("status", "complete");
 
-                // 构造更明确的 message
                 StringBuilder msg = new StringBuilder();
                 msg.append("✅ 前端修复完成：").append(projectName).append("\n\n");
                 msg.append("🌐 访问地址：http://127.0.0.1:9000/").append(projectName).append("/\n");
@@ -340,8 +399,8 @@ public class fix_tool implements Plugin {
                 envelop.payload = Map.of("ok", false, "error", "前端修复失败: " + err);
                 return envelop;
             }
-        } catch (Exception e) {
-            envelop.payload = Map.of("ok", false, "error", "前端修复异常: " + e.getMessage());
+        } catch (Throwable t) {
+            envelop.payload = Map.of("ok", false, "error", "前端修复异常: " + t.getMessage());
             return envelop;
         }
     }
@@ -400,20 +459,18 @@ public class fix_tool implements Plugin {
     }
 
     // ============================================================
-    // 后端修复（原逻辑）
+    // 后端修复
     // ============================================================
 
     private Envelop handleBackendFix(Envelop envelop, Agent agent, LLM llm,
                                       String sessionId, String projectName,
                                       String target, String issue) {
-        // 找现有 .java 文件
         List<Path> backendFiles = findBackendFiles(projectName);
         if (backendFiles.isEmpty()) {
             envelop.payload = Map.of("ok", false, "error", "项目不存在或无 .java 文件: " + projectName);
             return envelop;
         }
 
-        // 收集后端文件摘要 + 完整源码
         List<Map<String, String>> fileInfos = new ArrayList<>();
         for (Path f : backendFiles) {
             try {
@@ -432,14 +489,13 @@ public class fix_tool implements Plugin {
 
         String backendSource = collectBackendSource(backendFiles);
 
-        // fix_design
         pushProgress(agent, sessionId, "executing", "分析修复方案...");
 
         Map<String, Object> design;
         try {
             design = callFixDesign(llm, projectName, issue, fileInfos, backendSource);
-        } catch (Exception e) {
-            envelop.payload = Map.of("ok", false, "error", "修复方案设计失败: " + e.getMessage());
+        } catch (Throwable t) {
+            envelop.payload = Map.of("ok", false, "error", "修复方案设计失败: " + t.getMessage());
             return envelop;
         }
 
@@ -464,7 +520,6 @@ public class fix_tool implements Plugin {
 
         List<String> writtenFiles = new ArrayList<>();
 
-        // 按 mode 分流
         if ("regenerate".equals(mode)) {
             int idx = 0;
             for (Path file : backendFiles) {
@@ -505,9 +560,9 @@ public class fix_tool implements Plugin {
                         changeDesc, currentCode, agent, sessionId);
                     newCode = enforceClassName(newCode, pluginName);
                     newCode = newCode.replace("{project}", projectName);
-                } catch (Exception e) {
+                } catch (Throwable t) {
                     envelop.payload = Map.of("ok", false,
-                        "error", "重生成失败 (" + fileName + "): " + e.getMessage());
+                        "error", "重生成失败 (" + fileName + "): " + t.getMessage());
                     return envelop;
                 }
 
@@ -562,9 +617,9 @@ public class fix_tool implements Plugin {
                         currentCode, change, agent, sessionId);
                     newCode = enforceClassName(newCode, pluginName);
                     newCode = newCode.replace("{project}", projectName);
-                } catch (Exception e) {
+                } catch (Throwable t) {
                     envelop.payload = Map.of("ok", false,
-                        "error", "修复失败 (" + fileName + "): " + e.getMessage());
+                        "error", "修复失败 (" + fileName + "): " + t.getMessage());
                     return envelop;
                 }
 
@@ -582,7 +637,6 @@ public class fix_tool implements Plugin {
             }
         }
 
-        // 等加载
         pushProgress(agent, sessionId, "executing", "等待热加载编译...");
 
         try {
@@ -591,7 +645,6 @@ public class fix_tool implements Plugin {
             Thread.currentThread().interrupt();
         }
 
-        // 验证
         List<String> loaded = new ArrayList<>();
         List<String> notLoaded = new ArrayList<>();
 
@@ -618,7 +671,6 @@ public class fix_tool implements Plugin {
         data.put("all_loaded", allLoaded);
         data.put("status", allLoaded ? "complete" : "partial");
 
-        // 构造更明确的 message
         StringBuilder msg = new StringBuilder();
         msg.append("✅ 后端修复完成：").append(projectName).append("\n\n");
         msg.append("模式：").append(mode).append("\n");
@@ -761,7 +813,6 @@ public class fix_tool implements Plugin {
         return code;
     }
 
-    /** 流式 LLM 调用，每 chunk 推 code_stream */
     private String streamLLM(LLM llm, List<Map<String, String>> messages,
                               Agent agent, String sessionId) {
         final StringBuilder buffer = new StringBuilder();
@@ -800,7 +851,7 @@ public class fix_tool implements Plugin {
             data.put("chunk", chunk);
             env.payload.put("data", data);
             agent.call(env);
-        } catch (Exception ignored) {}
+        } catch (Throwable ignored) {}
     }
 
     private void pushProgress(Agent agent, String sessionId, String step, String msg) {
@@ -815,7 +866,7 @@ public class fix_tool implements Plugin {
             data.put("message", msg);
             env.payload.put("data", data);
             agent.call(env);
-        } catch (Exception ignored) {}
+        } catch (Throwable ignored) {}
     }
 
     // ============================================================

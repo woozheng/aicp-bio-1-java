@@ -12,7 +12,6 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.stream.Collectors;
 
 public class task_manager implements Plugin {
 
@@ -23,14 +22,12 @@ public class task_manager implements Plugin {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final SecureRandom RANDOM = new SecureRandom();
 
-    // 异步执行池：分身任务在这里跑，不阻塞当前 HTTP 请求
     private static final ExecutorService EXECUTOR = Executors.newCachedThreadPool(r -> {
         Thread t = new Thread(r, "task_manager-worker");
         t.setDaemon(true);
         return t;
     });
 
-    // 每个 parentSession 一把锁，避免并发读写同一 tasks.json
     private static final Map<String, Object> LOCKS = new ConcurrentHashMap<>();
 
     private static Object lockFor(String session) {
@@ -138,6 +135,26 @@ public class task_manager implements Plugin {
     }
 
     // ============================================================
+    // WS 推送
+    // ============================================================
+
+    static void pushEvent(Agent agent, String sessionId, String step, String msg) {
+        try {
+            Envelop wsEnv = new Envelop("builtins/tools/task_manager", "os/_websocket");
+            wsEnv.payload.put("action", "push");
+            wsEnv.payload.put("channel_id", "pa_" + sessionId);
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("type", "progress");
+            data.put("step", step);
+            data.put("msg", msg);
+            data.put("message", msg);
+            data.put("agent_type", "task_manager");
+            wsEnv.payload.put("data", data);
+            agent.call(wsEnv);
+        } catch (Exception ignored) {}
+    }
+
+    // ============================================================
     // action 处理器
     // ============================================================
 
@@ -172,7 +189,6 @@ public class task_manager implements Plugin {
             saveTasks(sessionId, tasks);
         }
 
-        // ★ 异步执行：不阻塞当前请求
         final String finalTaskId = taskId;
         EXECUTOR.submit(() -> runSubTask(agent, sessionId, finalTaskId, taskText));
 
@@ -184,19 +200,19 @@ public class task_manager implements Plugin {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ok", true);
         result.put("think",
-            "✅ 分身任务已创建：" + taskId + "（" + description + "），正在后台执行，完成后会自动回调。"
-            + "不要重复创建，等待【分身任务】摘要更新或回调结果。");
+            "✅ 分身任务已创建：" + taskId + "（" + description + "）。"
+            + "任务在后台执行，完成后会自动回调你。"
+            + "⚠️ 不要 list / collect 轮询，等回调即可。");
         result.put("data", data);
         result.put("_summary", formatSummary(sessionId));
         return result;
     }
 
-    /**
-     * 分身在独立线程里跑 main_agent。
-     * 用子 session_id（taskId），避免污染父 session 的信息流。
-     */
     static void runSubTask(Agent agent, String parentSession, String taskId, String taskText) {
         try {
+            // ★ 推「开始执行」
+            pushEvent(agent, parentSession, "executing", "⚡ 分身 " + taskId + " 开始执行");
+
             Envelop env = new Envelop("builtins/tools/task_manager", "builtins/agents/main_agent");
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("content", taskText);
@@ -206,14 +222,13 @@ public class task_manager implements Plugin {
 
             Map<String, Object> meta = new LinkedHashMap<>();
             meta.put("session_id", taskId);
-            meta.put("callback_receiver", "builtins/tools/task_manager");
+            // ★ 不再传 callback_receiver，避免双重回调
             meta.put("callback_session_id", parentSession);
             meta.put("_task_id", taskId);
             env.meta = meta;
 
             Envelop result = agent.call(env);
 
-            // 拿到结果 → 写任务状态 → 触发回调
             Map<String, Object> payloadRes = result != null && result.payload != null
                 ? result.payload : new LinkedHashMap<>();
             boolean ok = !Boolean.FALSE.equals(payloadRes.get("ok"));
@@ -241,28 +256,30 @@ public class task_manager implements Plugin {
         }
     }
 
-    /**
-     * 通知父 session 的 main_agent：有新结果了，继续推理。
-     */
     static void notifyParent(Agent agent, String parentSession, String taskId,
                              Map<String, Object> taskResult) {
-        Envelop env = new Envelop("builtins/tools/task_manager", "builtins/agents/main_agent");
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("content", "");
-        payload.put("action", "");
-        env.payload = payload;
-
-        Map<String, Object> meta = new LinkedHashMap<>();
-        meta.put("session_id", parentSession);
-        meta.put("is_callback", true);
-        meta.put("callback_session_id", parentSession);
-        meta.put("_task_id", taskId);
-        meta.put("_task_summary", formatSummary(parentSession));
-        meta.put("_task_result", taskResult);
-        env.meta = meta;
-
         try {
-            agent.call(env);
+            Envelop callback = new Envelop("builtins/tools/task_manager",
+                                           "builtins/agents/main_agent");
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("content", "");
+            payload.put("action", "");
+            callback.payload = payload;
+
+            Map<String, Object> meta = new LinkedHashMap<>();
+            meta.put("session_id", parentSession);
+            meta.put("is_callback", true);
+            meta.put("callback_session_id", parentSession);
+            meta.put("_task_id", taskId);
+            meta.put("_task_summary", formatSummary(parentSession));
+            meta.put("_task_result", taskResult);
+            callback.meta = meta;
+
+            agent.call(callback);
+
+            // ★ 推前端：任务完成
+            pushEvent(agent, parentSession, "done", "✅ 分身 " + taskId + " 完成");
+
         } catch (Exception ignored) {}
     }
 
@@ -291,7 +308,7 @@ public class task_manager implements Plugin {
 
         Map<String, Object> r = new LinkedHashMap<>();
         r.put("ok", true);
-        r.put("think", "共 " + result.size() + " 个任务");
+        r.put("think", "共 " + result.size() + " 个任务（running 的在后台跑，完成后会自动回调，不要轮询）");
         r.put("data", data);
         r.put("_summary", formatSummary(sessionId));
         return r;
@@ -435,12 +452,16 @@ public class task_manager implements Plugin {
             r.put("ok", true);
             r.put("think", "已清空 " + removed + " 个已结束任务");
             r.put("data", data);
+
+            // ★ 推前端：清理完成
+            pushEvent(agent, sessionId, "done", "清理分身任务：" + removed + " 个");
+
             return r;
         }
     }
 
     // ============================================================
-    // 回调处理
+    // 回调处理（保留兼容，默认不走这条路）
     // ============================================================
 
     static Envelop handleCallback(Envelop envelop, Agent agent) {
@@ -487,7 +508,6 @@ public class task_manager implements Plugin {
         String action = str(payload.getOrDefault("action", "list"));
         String sessionId = str(meta.getOrDefault("session_id", "default"));
 
-        // 分身不能再使用 task_manager
         if (sessionId.startsWith("sub_")) {
             envelop.payload = Map.of(
                 "ok", false,

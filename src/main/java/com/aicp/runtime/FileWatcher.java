@@ -11,18 +11,18 @@ import java.util.concurrent.TimeUnit;
 /**
  * FileWatcher — 监听 plugins/ 目录，自动编译 + 加载新插件
  *
- * 与 TS 版 runtime/hot_reload_watcher.ts 对应。
+ * ★ 不死保证：
+ *   1. loop() 用 catch (Throwable)，任何 Error/Exception 都不会杀线程
+ *   2. handleNewOrModified() 用 catch (Throwable)
+ *   3. handleRemoved() 用 catch (Throwable)
+ *   4. doPeriodicScan() 用 catch (Throwable)
+ *   5. scanDirNow() 用 catch (Throwable)
+ *   6. WatchService 挂了，自动重建
  *
- * 支持：
- *   - 新建 .java → 编译 + 加载
- *   - 修改 .java → 编译 + 加载
- *   - 删除 .java → 卸载
- *
- * 用 JDK 自带的 WatchService。
- *
- * ★ 关键：
- *   1. 启动时 initCaches() 记下所有现有 .java 的 mtime，避免"重复 reload"
- *   2. 每 2 秒 doPeriodicScan() 补漏（WatchService 的 ENTRY_CREATE 事件可能漏）
+ * ★ 关键机制：
+ *   1. 启动时 initCaches() 记下所有现有 .java 的 mtime
+ *   2. 每 2 秒 doPeriodicScan() 补漏
+ *   3. 新建目录时，registerAll 后立即扫描目录内已有的 .java
  */
 public class FileWatcher {
 
@@ -32,7 +32,7 @@ public class FileWatcher {
     private Thread watchThread;
     private volatile boolean running = false;
 
-    /** 已处理过的文件 mtime，避免重复处理 */
+    /** 已处理过的文件 mtime */
     private final Map<Path, Long> mtimeCache = new HashMap<>();
 
     /** 失败重试计数 */
@@ -53,7 +53,7 @@ public class FileWatcher {
 
         watchService = FileSystems.getDefault().newWatchService();
         registerAll(pluginsDir);
-        initCaches();   // ★ 启动时记下所有现有文件的 mtime
+        initCaches();
 
         running = true;
         watchThread = new Thread(this::loop, "FileWatcher");
@@ -68,13 +68,12 @@ public class FileWatcher {
         if (watchThread != null) watchThread.interrupt();
         try {
             if (watchService != null) watchService.close();
-        } catch (IOException ignored) {}
+        } catch (Throwable ignored) {}
         System.out.println("[FileWatcher] Stopped");
     }
 
     // ============================================================
-    // ★ 初始化缓存：记下所有现有 .java 的 mtime
-    //    这样 doPeriodicScan 不会把"现有文件" 当"新文件"
+    // initCaches
     // ============================================================
 
     private void initCaches() {
@@ -87,58 +86,61 @@ public class FileWatcher {
                     try {
                         long mtime = Files.getLastModifiedTime(p).toMillis();
                         mtimeCache.put(p, mtime);
-                    } catch (IOException ignored) {}
+                    } catch (Throwable ignored) {}
                 });
             System.out.println("[FileWatcher] Initialized cache with " + mtimeCache.size() + " files");
-        } catch (Exception e) {
-            System.err.println("[FileWatcher] initCaches error: " + e.getMessage());
+        } catch (Throwable t) {
+            System.err.println("[FileWatcher] initCaches error: " + t);
         }
     }
 
     // ============================================================
-    // 主循环
+    // 主循环 —— 不死
     // ============================================================
 
     private void loop() {
         while (running) {
             try {
-                // ★ 关键：poll(2s)，没事件就做全量扫描
                 WatchKey key = watchService.poll(2, TimeUnit.SECONDS);
 
                 if (key != null) {
                     Path dir = (Path) key.watchable();
 
                     for (WatchEvent<?> event : key.pollEvents()) {
-                        WatchEvent.Kind<?> kind = event.kind();
+                        try {
+                            WatchEvent.Kind<?> kind = event.kind();
+                            if (kind == StandardWatchEventKinds.OVERFLOW) continue;
 
-                        if (kind == StandardWatchEventKinds.OVERFLOW) continue;
+                            Path name = (Path) event.context();
+                            Path fullPath = dir.resolve(name);
 
-                        Path name = (Path) event.context();
-                        Path fullPath = dir.resolve(name);
-
-                        if (kind == StandardWatchEventKinds.ENTRY_CREATE) {
-                            // 新建目录 → 注册到 watcher
-                            if (Files.isDirectory(fullPath)) {
-                                registerAll(fullPath);
+                            if (kind == StandardWatchEventKinds.ENTRY_CREATE) {
+                                if (Files.isDirectory(fullPath)) {
+                                    registerAll(fullPath);
+                                    scanDirNow(fullPath);
+                                } else if (isJavaFile(fullPath)) {
+                                    handleNewOrModified(fullPath);
+                                }
+                            } else if (kind == StandardWatchEventKinds.ENTRY_MODIFY) {
+                                if (isJavaFile(fullPath)) {
+                                    handleNewOrModified(fullPath);
+                                }
+                            } else if (kind == StandardWatchEventKinds.ENTRY_DELETE) {
+                                if (isJavaFile(fullPath)) {
+                                    handleRemoved(fullPath);
+                                }
                             }
-                            // 新建 .java → 编译 + 加载
-                            else if (isJavaFile(fullPath)) {
-                                handleNewOrModified(fullPath);
-                            }
-                        } else if (kind == StandardWatchEventKinds.ENTRY_MODIFY) {
-                            if (isJavaFile(fullPath)) {
-                                handleNewOrModified(fullPath);
-                            }
-                        } else if (kind == StandardWatchEventKinds.ENTRY_DELETE) {
-                            if (isJavaFile(fullPath)) {
-                                handleRemoved(fullPath);
-                            }
+                        } catch (Throwable t) {
+                            System.err.println("[FileWatcher] Event handle error: " + t);
+                            t.printStackTrace();
                         }
                     }
 
-                    key.reset();
+                    try {
+                        key.reset();
+                    } catch (Throwable ignored) {}
+
                 } else {
-                    // ★ 没有事件 → 做全量扫描，补"漏掉的事件"
                     doPeriodicScan();
                 }
 
@@ -146,25 +148,65 @@ public class FileWatcher {
                 Thread.currentThread().interrupt();
                 break;
             } catch (ClosedWatchServiceException e) {
-                break;
-            } catch (Exception e) {
-                System.err.println("[FileWatcher] Error: " + e.getMessage());
+                // watchService 被关了，尝试重建
+                System.err.println("[FileWatcher] WatchService closed, recreating...");
+                if (!recreateWatchService()) {
+                    break;
+                }
+            } catch (Throwable t) {
+                // ★ 任何异常都不杀线程
+                System.err.println("[FileWatcher] Loop error: " + t);
+                t.printStackTrace();
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
             }
+        }
+        System.out.println("[FileWatcher] Loop exited");
+    }
+
+    private boolean recreateWatchService() {
+        try {
+            if (watchService != null) {
+                try { watchService.close(); } catch (Throwable ignored) {}
+            }
+            watchService = FileSystems.getDefault().newWatchService();
+            registerAll(pluginsDir);
+            System.out.println("[FileWatcher] WatchService recreated");
+            return true;
+        } catch (Throwable t) {
+            System.err.println("[FileWatcher] Recreate failed: " + t);
+            return false;
         }
     }
 
     // ============================================================
-    // ★ 周期性全量扫描（补漏）
-    //    - 检测"新文件"（mtimeCache 里没有）
-    //    - 检测"被修改的文件"（mtime 变大）
-    //    - 检测"被删除的文件"（mtimeCache 里有但实际没有）
+    // scanDirNow —— 新目录里已有的 .java
+    // ============================================================
+
+    private void scanDirNow(Path dir) {
+        try {
+            if (!Files.exists(dir)) return;
+            Files.walk(dir)
+                .filter(Files::isRegularFile)
+                .filter(this::isJavaFile)
+                .forEach(this::handleNewOrModified);
+        } catch (Throwable t) {
+            System.err.println("[FileWatcher] scanDirNow error: " + t);
+        }
+    }
+
+    // ============================================================
+    // doPeriodicScan —— 全量补漏
     // ============================================================
 
     private void doPeriodicScan() {
         try {
             if (!Files.exists(pluginsDir)) return;
 
-            // 收集当前所有 .java 文件
             Map<Path, Long> currentFiles = new HashMap<>();
             Files.walk(pluginsDir)
                 .filter(Files::isRegularFile)
@@ -173,10 +215,9 @@ public class FileWatcher {
                     try {
                         long mtime = Files.getLastModifiedTime(p).toMillis();
                         currentFiles.put(p, mtime);
-                    } catch (IOException ignored) {}
+                    } catch (Throwable ignored) {}
                 });
 
-            // 检测"新文件" / "被修改的文件"
             for (Map.Entry<Path, Long> entry : currentFiles.entrySet()) {
                 Path file = entry.getKey();
                 Long mtime = entry.getValue();
@@ -186,48 +227,53 @@ public class FileWatcher {
                 }
             }
 
-            // 检测"被删除的文件"
-            // 注意：遍历 mtimeCache 的"副本"，避免并发修改
             for (Path cachedPath : new HashMap<>(mtimeCache).keySet()) {
                 if (!currentFiles.containsKey(cachedPath)) {
                     handleRemoved(cachedPath);
                 }
             }
-        } catch (Exception e) {
-            System.err.println("[FileWatcher] Periodic scan error: " + e.getMessage());
+        } catch (Throwable t) {
+            System.err.println("[FileWatcher] Periodic scan error: " + t);
         }
     }
 
     // ============================================================
-    // 处理新建 / 修改
+    // handleNewOrModified —— 不死
     // ============================================================
 
     private void handleNewOrModified(Path javaFile) {
         try {
-            Thread.sleep(500);
-
-            // 检查文件大小稳定（防"半截文件"）
-            long size1;
-            try {
-                size1 = Files.size(javaFile);
-            } catch (IOException e) {
-                return;   // 文件不存在了
-            }
             Thread.sleep(300);
-            long size2;
+
+            long mtime1;
             try {
-                size2 = Files.size(javaFile);
-            } catch (IOException e) {
+                mtime1 = Files.getLastModifiedTime(javaFile).toMillis();
+            } catch (Throwable e) {
                 return;
             }
-            if (size1 != size2) return;   // 还在写
+            Thread.sleep(200);
+            long mtime2;
+            try {
+                mtime2 = Files.getLastModifiedTime(javaFile).toMillis();
+            } catch (Throwable e) {
+                return;
+            }
+            if (mtime1 != mtime2) return;
 
-            long mtime = Files.getLastModifiedTime(javaFile).toMillis();
+            long mtime = mtime2;
             Long cached = mtimeCache.get(javaFile);
             if (cached != null && cached == mtime) return;
 
             String receiver = calcReceiver(javaFile);
-            boolean ok = loader.loadDynamic(javaFile, receiver);
+            boolean ok = false;
+            try {
+                ok = loader.loadDynamic(javaFile, receiver);
+            } catch (Throwable t) {
+                // ★ 关键：NoClassDefFoundError 等 Error 不会杀线程
+                System.err.println("[FileWatcher] loadDynamic threw: " + t);
+                t.printStackTrace();
+                ok = false;
+            }
 
             if (ok) {
                 mtimeCache.put(javaFile, mtime);
@@ -237,40 +283,41 @@ public class FileWatcher {
                 int n = retryCount.getOrDefault(javaFile, 0) + 1;
                 retryCount.put(javaFile, n);
                 if (n >= MAX_RETRY) {
-                    mtimeCache.put(javaFile, mtime);   // 放弃
+                    mtimeCache.put(javaFile, mtime);
                     retryCount.remove(javaFile);
                     System.err.println("[FileWatcher] Give up after " + n + " retries: " + receiver);
                 } else {
                     System.err.println("[FileWatcher] Retry " + n + "/" + MAX_RETRY + ": " + receiver);
-                    // 不缓存 mtime，下次会重试
                 }
             }
-        } catch (Exception e) {
-            System.err.println("[FileWatcher] Handle failed: " + e.getMessage());
+        } catch (Throwable t) {
+            // ★ 兜底：任何 Throwable 都不杀线程
+            System.err.println("[FileWatcher] Handle failed: " + t);
+            t.printStackTrace();
         }
     }
 
     // ============================================================
-    // 处理删除
+    // handleRemoved —— 不死
     // ============================================================
 
     private void handleRemoved(Path javaFile) {
         try {
             String receiver = calcReceiver(javaFile);
 
-            // 从 Plugins.INSTANCE 移除
-            if (Plugins.INSTANCE.remove(receiver) != null) {
-                System.out.println("[FileWatcher] Removed: " + receiver);
-            }
+            try {
+                if (Plugins.INSTANCE.remove(receiver) != null) {
+                    System.out.println("[FileWatcher] Removed: " + receiver);
+                }
+            } catch (Throwable ignored) {}
 
-            // 从 PluginLoader 的 dynamicLoaded 移除
-            loader.getDynamicLoaded().remove(receiver);
+            try {
+                loader.getDynamicLoaded().remove(receiver);
+            } catch (Throwable ignored) {}
 
-            // 从 mtimeCache 移除
             mtimeCache.remove(javaFile);
             retryCount.remove(javaFile);
 
-            // 删除对应的 .class（可选）
             Path classFile = javaFile.resolveSibling(
                 javaFile.getFileName().toString().replace(".java", ".class")
             );
@@ -278,17 +325,17 @@ public class FileWatcher {
                 try {
                     Files.delete(classFile);
                     System.out.println("[FileWatcher] Deleted class: " + classFile.getFileName());
-                } catch (IOException e) {
-                    System.err.println("[FileWatcher] Delete class failed: " + e.getMessage());
+                } catch (Throwable e) {
+                    System.err.println("[FileWatcher] Delete class failed: " + e);
                 }
             }
-        } catch (Exception e) {
-            System.err.println("[FileWatcher] Handle removed failed: " + e.getMessage());
+        } catch (Throwable t) {
+            System.err.println("[FileWatcher] Handle removed failed: " + t);
         }
     }
 
     // ============================================================
-    // 注册目录到 watcher
+    // registerAll
     // ============================================================
 
     private void registerAll(Path root) throws IOException {
@@ -302,8 +349,8 @@ public class FileWatcher {
                         StandardWatchEventKinds.ENTRY_CREATE,
                         StandardWatchEventKinds.ENTRY_MODIFY,
                         StandardWatchEventKinds.ENTRY_DELETE);
-                } catch (IOException e) {
-                    System.err.println("[FileWatcher] Register failed: " + dir + " " + e.getMessage());
+                } catch (Throwable e) {
+                    System.err.println("[FileWatcher] Register failed: " + dir + " " + e);
                 }
             });
     }
@@ -313,18 +360,26 @@ public class FileWatcher {
     // ============================================================
 
     private boolean isJavaFile(Path path) {
-        String name = path.getFileName().toString();
-        if (!name.endsWith(".java")) return false;
-        if (name.startsWith(".")) return false;
-        if (name.endsWith(".d.java")) return false;
-        if (name.contains(".test.")) return false;
-        if (name.contains(".spec.")) return false;
-        return true;
+        try {
+            String name = path.getFileName().toString();
+            if (!name.endsWith(".java")) return false;
+            if (name.startsWith(".")) return false;
+            if (name.endsWith(".d.java")) return false;
+            if (name.contains(".test.")) return false;
+            if (name.contains(".spec.")) return false;
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     private String calcReceiver(Path javaFile) {
-        Path rel = pluginsDir.relativize(javaFile);
-        String s = rel.toString().replace("\\", "/");
-        return s.replaceAll("\\.java$", "");
+        try {
+            Path rel = pluginsDir.relativize(javaFile);
+            String s = rel.toString().replace("\\", "/");
+            return s.replaceAll("\\.java$", "");
+        } catch (Throwable t) {
+            return javaFile.getFileName().toString().replace(".java", "");
+        }
     }
 }

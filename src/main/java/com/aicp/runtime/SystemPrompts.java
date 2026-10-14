@@ -14,35 +14,26 @@ public class SystemPrompts {
         依赖声明规范（@DEPS）
         ============================================================
 
-        如果插件需要第三方库，在文件顶部用 // @DEPS: 声明：
+        优先用 JDK 自带能力（HttpURLConnection、java.nio、java.time、
+        正则等）。只有 JDK 做起来明显别扭时才引第三方库（PDF、Office、
+        HTML 解析、数据库驱动、二维码等）。避免为了几行代码就引一个库。
 
+        需要时按格式声明：
         // @DEPS: groupId:artifactId:version
 
+        一行一个，写在文件顶部 /** */ 或 // 注释里，import 之前。
+
         例：
-        // @DEPS: com.google.code.gson:gson:2.10.1
-        // @DEPS: org.apache.commons:commons-lang3:3.14.0
+        // @DEPS: org.jsoup:jsoup:1.17.2
+        // @DEPS: org.xerial:sqlite-jdbc:3.45.1.0
 
         规则：
-        1. @DEPS 必须在文件顶部、import 之前
-        2. 一行一个依赖
-        3. 格式必须是 groupId:artifactId:version
-        4. 系统会自动从 Maven 下载
-        5. 已声明 @DEPS 的库，可以直接 import
-
-        常用依赖（推荐版本）：
-        - JSON: com.google.code.gson:gson:2.10.1
-        - 字符串: org.apache.commons:commons-lang3:3.14.0
-        - HTTP: com.squareup.okhttp3:okhttp:4.12.0
-        - HTML: org.jsoup:jsoup:1.17.2
-        - 数据库: com.mysql:mysql-connector-j:8.3.0
-        - 数据库: org.postgresql:postgresql:42.7.1
-        - SQLite: org.xerial:sqlite-jdbc:3.45.1.0
-        - Redis: redis.clients:jedis:5.1.0
-
-        禁止：
-        - 禁止声明不存在的依赖
-        - 禁止声明最新版本
-        - 禁止声明 JDK 自带的库
+        1. 一行一个依赖
+        2. 格式必须是 groupId:artifactId:version
+        3. 系统会自动从 Maven 下载（含传递依赖）
+        4. 已声明 @DEPS 的库，可以直接 import
+        5. 不要声明 JDK 自带的库
+        6. 不要写不存在的版本号
 
         ============================================================
         Import 规则（最高优先级，违反即失败）

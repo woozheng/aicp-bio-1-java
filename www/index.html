@@ -408,6 +408,8 @@
     <button class="footer-btn" onclick="openCronModal()">💓 心跳</button>
     <button class="footer-btn" onclick="openSkillModal()">🧠 技能
     <span id="skillBadge" style="margin-left:4px;color:#10b981;display:none;">●</span></button>
+    <button class="footer-btn" onclick="openSubTaskModal()">🚀 分身
+        <span id="subTaskBadge" style="margin-left:4px;color:#10b981;display:none;">●</span></button>
     <span id="wsStatus"><span class="dot green"></span>已连接</span>
 </div>
 
@@ -457,6 +459,28 @@
         </div>
         <div class="state-modal-body" style="min-height:360px">
             <textarea id="skillEditor" class="state-modal-editor" placeholder="当前没有加载技能..."></textarea>
+        </div>
+    </div>
+</div>
+<!-- 分身任务 Modal -->
+<div class="state-modal-overlay" id="subTaskModalOverlay" onclick="if(event.target===this)closeSubTaskModal()">
+    <div class="state-modal" style="max-width:900px">
+        <div class="state-modal-header">
+            <span>🚀 分身任务</span>
+            <div class="state-modal-actions">
+                <button onclick="reloadSubTasks()">🔄 刷新</button>
+                <button onclick="closeSubTaskModal()">✕</button>
+            </div>
+        </div>
+        <div class="state-modal-body" style="min-height:400px;padding:0;overflow:hidden;display:flex">
+            <!-- 左侧：任务列表 -->
+            <div id="subTaskList" style="width:280px;border-right:1px solid rgba(255,255,255,0.06);overflow-y:auto;padding:8px">
+                <div class="loading">加载中...</div>
+            </div>
+            <!-- 右侧：选中任务的 flow -->
+            <div id="subTaskDetail" style="flex:1;overflow-y:auto;padding:12px 16px">
+                <div class="empty-state">← 选择一个分身任务</div>
+            </div>
         </div>
     </div>
 </div>
@@ -1193,6 +1217,205 @@ async function loadCurrentModel() {
         document.getElementById('currentModelDisplay').textContent = '?';
     }
 }
+
+// ============================================================
+// 4.7 分身任务
+// ============================================================
+
+var _subTasks = {};
+var _selectedSubTask = null;
+
+function openSubTaskModal() {
+    document.getElementById('subTaskModalOverlay').classList.add('show');
+    reloadSubTasks();
+}
+
+function closeSubTaskModal() {
+    document.getElementById('subTaskModalOverlay').classList.remove('show');
+}
+
+async function reloadSubTasks() {
+    var box = document.getElementById('subTaskList');
+    box.innerHTML = '<div class="loading">加载中...</div>';
+
+    try {
+        var res = await fetch('/api/builtins/tools/task_manager', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                action: 'list',
+                params: {},
+                meta: {session_id: sessionId}
+            })
+        });
+        var raw = await res.json();
+        var data = raw.data || raw;
+        var payload = data.data || data;
+
+        var tasks = payload.tasks || [];
+        _subTasks = {};
+        tasks.forEach(function(t) {
+            _subTasks[t.task_id] = t;
+        });
+
+        renderSubTaskList();
+
+        // ★ 新增：如果选中的任务已不存在，清空右侧
+        if (_selectedSubTask && !_subTasks[_selectedSubTask]) {
+            _selectedSubTask = null;
+            var detail = document.getElementById('subTaskDetail');
+            detail.innerHTML = '<div class="empty-state">← 选择一个分身任务</div>';
+        }
+    } catch(e) {
+        box.innerHTML = '<div class="empty-state">加载失败: ' + e.message + '</div>';
+    }
+}
+
+function renderSubTaskList() {
+    var box = document.getElementById('subTaskList');
+    var ids = Object.keys(_subTasks);
+
+    if (ids.length === 0) {
+        box.innerHTML = '<div class="empty-state" style="padding:20px 0">暂无分身任务</div>';
+        return;
+    }
+
+    // 按创建时间排序
+    ids.sort(function(a, b) {
+        return (_subTasks[a].created_at || '').localeCompare(_subTasks[b].created_at || '');
+    });
+
+    var html = '';
+    ids.forEach(function(tid) {
+        var t = _subTasks[tid];
+        var status = t.status || 'unknown';
+        var icon = {
+            'pending': '📝',
+            'running': '⏳',
+            'done': '✅',
+            'failed': '❌',
+            'timeout': '⏰',
+            'cancelled': '🚫'
+        }[status] || '?';
+
+        var cls = (_selectedSubTask === tid) ? ' active' : '';
+        html += '<div class="day-item' + cls + '" onclick="selectSubTask(\'' + tid + '\')" style="cursor:pointer">';
+        html += '  <div style="flex:1;min-width:0">';
+        html += '    <div class="day-label" style="font-size:11px">' + icon + ' ' + escapeHtml(tid) + '</div>';
+        html += '    <div style="font-size:10px;color:#888;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(t.description || '') + '</div>';
+        html += '  </div>';
+        html += '  <div class="day-count">' + escapeHtml(status) + '</div>';
+        html += '</div>';
+    });
+    box.innerHTML = html;
+}
+
+async function selectSubTask(taskId) {
+    _selectedSubTask = taskId;
+    renderSubTaskList();
+    await loadSubTaskDetail(taskId);
+}
+
+async function loadSubTaskDetail(taskId) {
+    var detail = document.getElementById('subTaskDetail');
+    detail.innerHTML = '<div class="loading">加载中...</div>';
+
+    try {
+        // 调 task_manager 拿单任务状态
+        var res1 = await fetch('/api/builtins/tools/task_manager', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                action: 'collect',
+                params: {task_id: taskId},
+                meta: {session_id: sessionId}
+            })
+        });
+        var raw1 = await res1.json();
+        var payload1 = (raw1.data || raw1).data || raw1.data || raw1;
+
+        var task = payload1 || {};
+        var status = task.status || _subTasks[taskId]?.status || '?';
+
+        // 拿分身自己的 flow
+        var flow = [];
+        try {
+            var res2 = await fetch('/api/builtins/agents/main_agent', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    action: 'get_session',
+                    session_id: taskId
+                })
+            });
+            var raw2 = await res2.json();
+            if (raw2.ok && raw2.flow) {
+                flow = raw2.flow;
+            }
+        } catch(e) {
+            console.warn('load sub flow failed:', e);
+        }
+
+        renderSubTaskDetail(taskId, task, flow);
+    } catch(e) {
+        detail.innerHTML = '<div class="empty-state">加载失败: ' + e.message + '</div>';
+    }
+}
+
+function renderSubTaskDetail(taskId, task, flow) {
+    var detail = document.getElementById('subTaskDetail');
+    var html = '';
+
+    html += '<div style="margin-bottom:12px">';
+    html += '  <div style="font-size:14px;font-weight:600;color:#e0e0e0;font-family:monospace">' + escapeHtml(taskId) + '</div>';
+    html += '  <div style="font-size:12px;color:#888;margin-top:4px">' + escapeHtml(task.description || '') + '</div>';
+    html += '</div>';
+
+    html += '<div style="font-size:11px;color:#666;margin-bottom:8px">';
+    html += '  状态: <span style="color:#e94560">' + escapeHtml(task.status || '?') + '</span>';
+    if (task.created_at) html += ' · 创建: ' + escapeHtml(formatTime(task.created_at));
+    if (task.finished_at) html += ' · 完成: ' + escapeHtml(formatTime(task.finished_at));
+    html += '</div>';
+
+    // 任务描述
+    if (task.task) {
+        html += '<div style="margin:12px 0;padding:8px 10px;background:rgba(0,0,0,0.2);border-radius:6px;font-size:11px;color:#888;white-space:pre-wrap">';
+        html += escapeHtml(task.task);
+        html += '</div>';
+    }
+
+    // flow
+    if (flow && flow.length > 0) {
+        html += '<div style="font-size:12px;font-weight:600;color:#888;margin:12px 0 8px">执行过程（' + flow.length + ' 条）</div>';
+        html += '<div style="display:flex;flex-direction:column;gap:6px">';
+
+        flow.forEach(function(entry) {
+            var itemHtml = _renderFlowItem(entry);
+            if (itemHtml) html += itemHtml;
+        });
+
+        html += '</div>';
+    } else {
+        html += '<div class="empty-state" style="padding:20px 0">暂无执行记录</div>';
+    }
+
+    // 结果
+    if (task.result) {
+        html += '<div style="font-size:12px;font-weight:600;color:#888;margin:16px 0 8px">结果</div>';
+        html += '<div style="padding:8px 10px;background:rgba(16,185,129,0.06);border-left:2px solid #10b981;border-radius:0 6px 6px 0;font-size:11px;color:#cbd5e1;white-space:pre-wrap;max-height:300px;overflow-y:auto">';
+        html += escapeHtml(typeof task.result === 'object' ? JSON.stringify(task.result, null, 2) : String(task.result));
+        html += '</div>';
+    }
+
+    if (task.error) {
+        html += '<div style="font-size:12px;font-weight:600;color:#888;margin:16px 0 8px">错误</div>';
+        html += '<div style="padding:8px 10px;background:rgba(239,68,68,0.06);border-left:2px solid #ef4444;border-radius:0 6px 6px 0;font-size:11px;color:#fca5a5;white-space:pre-wrap;max-height:300px;overflow-y:auto">';
+        html += escapeHtml(task.error);
+        html += '</div>';
+    }
+
+    detail.innerHTML = html;
+}
 // ============================================================
 // 5. WebSocket
 // ============================================================
@@ -1259,7 +1482,13 @@ function connectWS() {
                     }
                     return;
                 }
-
+                // 在 ws.onmessage 里，progress 分支后加：
+                if (data.agent_type === 'task_manager' || (data.msg || '').indexOf('分身') !== -1) {
+                    if (document.getElementById('subTaskModalOverlay').classList.contains('show')) {
+                        clearTimeout(window._subTaskRefreshTimer);
+                        window._subTaskRefreshTimer = setTimeout(reloadSubTasks, 500);
+                    }
+                }
                 if (type === 'summary_stream') {
                     var msgs = document.getElementById('chatMessages');
                     var lastMsg = msgs.querySelector('.msg.assistant:last-of-type .bubble[data-stream="summary"]');
@@ -1981,8 +2210,8 @@ async function uploadFile(file) {
         formData.append('file', file);
         formData.append('session_id', sessionId);
 
-        var p = window.location.port;
-        var uploadUrl = p ? window.location.protocol + '//' + window.location.hostname + ':' + (parseInt(p) + 2) + '/upload' : '/upload';
+        var cfg = await fetch('/api/upload_config').then(function(r) { return r.json(); });
+        var uploadUrl = cfg.url || '/upload';
 
         var res = await fetch(uploadUrl, {
             method: 'POST',
@@ -2210,6 +2439,7 @@ document.addEventListener('keydown', function(e) {
         closeCronModal();
         closeSkillModal();
         closeModelModal();
+         closeSubTaskModal();
     }
 });
 

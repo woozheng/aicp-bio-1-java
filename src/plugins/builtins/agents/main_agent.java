@@ -9,25 +9,18 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+
 /**
- * builtins/agents/main_agent — 主控制台 Agent（简化版）
- *
- * receiver 从"文件路径"推：builtins/agents/main_agent
- *
- * 简化点（相对于 TS 版）：
- *   - 不做流式推送
- *   - 不做异步回调（create_tool / fix_tool 同步执行）
- *   - 不做分身（task_manager 后补）
- *   - 不做技能（skill_loader 后补）
- *
- * 内含包私有类：InformationFlow / ObjectMapperHolder / LLMOutputParser
- *                / FastValidator / CoreProcessor / PromptManager
+ * builtins/agents/main_agent — 主控制台 Agent（异步版）
  */
 public class main_agent implements Plugin {
 
@@ -37,10 +30,23 @@ public class main_agent implements Plugin {
 
     private static final Map<String, InformationFlow> SESSION_FLOWS = new ConcurrentHashMap<>();
     private static final Map<String, Object> SESSION_LOCKS = new ConcurrentHashMap<>();
+    private static final SecureRandom RANDOM = new SecureRandom();
+
+    // ★ 异步执行池：create_tool / fix_tool / 分身 都在这里跑
+    private static final ExecutorService EXECUTOR = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "main_agent-worker");
+        t.setDaemon(true);
+        return t;
+    });
 
     @Override
     public Envelop execute(Envelop envelop, Agent agent) {
         try {
+            // ★★★ 回调优先 ★★★
+            if (Boolean.TRUE.equals(envelop.meta.get("is_callback"))) {
+                return handleCallback(envelop, agent);
+            }
+
             String action = envelop.payload.get("action") != null
                 ? envelop.payload.get("action").toString()
                 : "chat";
@@ -165,6 +171,156 @@ public class main_agent implements Plugin {
         }
     }
 
+    // ============================================================
+    // ★★★ 回调处理 ★★★
+    // ============================================================
+
+    private Envelop handleCallback(Envelop envelop, Agent agent) {
+        String parentSession = str(envelop.meta.get("callback_session_id"));
+        if (parentSession.isEmpty()) {
+            parentSession = str(envelop.meta.get("session_id"));
+        }
+        if (parentSession.isEmpty()) parentSession = "default";
+
+        String taskId = str(envelop.meta.get("_task_id"));
+        String taskSummary = str(envelop.meta.get("_task_summary"));
+
+        InformationFlow flow = getOrCreateFlow(parentSession);
+
+        // 1. 把 task_summary 写进 flow（让 LLM 看到「任务完成」）
+        if (!taskSummary.isEmpty()) {
+            Map<String, Object> detail = new LinkedHashMap<>();
+            detail.put("task_id", taskId);
+            flow.appendSystem("task_summary", taskSummary, detail, 5);
+        }
+
+        // 2. 如果有 task_result，也写进去
+        Object taskResult = envelop.meta.get("_task_result");
+        if (taskResult instanceof Map<?, ?> resultMap) {
+            Map<String, Object> casted = castMap(resultMap);
+            Map<String, Object> detail = new LinkedHashMap<>();
+            detail.put("task_id", taskId);
+            detail.put("result", casted);
+            flow.appendSystem("async_callback", "📨 任务完成: " + taskId, detail, 3);
+        }
+
+        // 3. ★ 触发 LLM：让它看到 task_summary，回复用户
+        Object lock = SESSION_LOCKS.computeIfAbsent(parentSession, k -> new Object());
+        CoreProcessor processor = new CoreProcessor();
+        Map<String, Object> result;
+        synchronized (lock) {
+            result = processor.process(agent, parentSession, flow, 0);
+        }
+
+        // 4. ★ 如果 LLM 回复了，推给前端
+        String call = str(result.get("call"));
+        if ("reply".equals(call)) {
+            String content = str(result.get("content"));
+            if (!content.isEmpty()) {
+                CoreProcessor.pushEvent(agent, parentSession, chatEvent(content));
+            }
+        }
+
+        envelop.payload = result;
+        return envelop;
+    }
+
+    // ============================================================
+    // ★★★ 异步工具执行（create_tool / fix_tool） ★★★
+    // ============================================================
+
+    public static void submitAsyncTool(Agent agent, String parentSession,
+                                        String target, Map<String, Object> args,
+                                        String description) {
+        String taskId = "task_" + randomHex(8);
+
+        EXECUTOR.submit(() -> {
+            Map<String, Object> result = new LinkedHashMap<>();
+            try {
+                Envelop env = new Envelop("builtins/agents/main_agent", target);
+
+                // ★ 从 args 里取 action + params，拼成 payload
+                // args 结构：{"target": "...", "action": "fix", "params": {"target": "...", "issue": "..."}}
+                // payload 结构：{"action": "fix", "target": "...", "issue": "..."}
+                String toolAction = str(args.get("action"));
+                Object paramsObj = args.get("params");
+                Map<String, Object> params = paramsObj instanceof Map
+                    ? castMap((Map<?, ?>) paramsObj) : new LinkedHashMap<>();
+
+                Map<String, Object> payload = new LinkedHashMap<>(params);
+                if (!toolAction.isEmpty()) payload.put("action", toolAction);
+                env.payload = payload;
+
+                Map<String, Object> meta = new LinkedHashMap<>();
+                // ★ 保持主 session，让 create_tool / fix_tool 推到 pa_主session
+                meta.put("session_id", parentSession);
+                env.meta = meta;
+
+                Envelop res = agent.call(env);
+                if (res != null && res.payload != null) {
+                    result.put("ok", true);
+                    result.put("data", res.payload);
+                } else {
+                    result.put("ok", false);
+                    result.put("error", "无返回");
+                }
+            } catch (Exception e) {
+                result.put("ok", false);
+                result.put("error", e.getMessage());
+            }
+
+            notifyParent(agent, parentSession, taskId, target, description, result);
+        });
+    }
+
+    private static void notifyParent(Agent agent, String parentSession,
+                                     String taskId, String target,
+                                     String description, Map<String, Object> taskResult) {
+        try {
+            Envelop callback = new Envelop("builtins/agents/main_agent",
+                                           "builtins/agents/main_agent");
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("content", "");
+            payload.put("action", "");
+            callback.payload = payload;
+
+            Map<String, Object> meta = new LinkedHashMap<>();
+            meta.put("session_id", parentSession);
+            meta.put("is_callback", true);
+            meta.put("callback_session_id", parentSession);
+            meta.put("_task_id", taskId);
+            meta.put("_task_summary",
+                "✅ " + target + " 完成：" + description + "\n结果：" + truncate(toJson(taskResult), 500));
+            meta.put("_task_result", taskResult);
+            callback.meta = meta;
+
+            agent.call(callback);
+
+            // ★ 推前端：任务完成
+            CoreProcessor.pushEvent(agent, parentSession, progressEvent(
+                "done", "✅ " + target + " 完成"
+            ));
+
+        } catch (Exception ignored) {}
+    }
+
+    // ★ 需要加这个辅助方法（pushEvent 要一个 Map）
+    private static Map<String, Object> progressEvent(String step, String msg) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("type", "progress");
+        m.put("step", step);
+        m.put("msg", msg);
+        m.put("message", msg);
+        m.put("agent_type", "main");
+        return m;
+    }
+
+
+
+    // ============================================================
+    // 工具
+    // ============================================================
+
     static InformationFlow getOrCreateFlow(String sessionId) {
         return SESSION_FLOWS.computeIfAbsent(sessionId, InformationFlow::new);
     }
@@ -186,12 +342,48 @@ public class main_agent implements Plugin {
     static String str(Object o) {
         return o != null ? o.toString() : "";
     }
+
+    private static Map<String, Object> castMap(Map<?, ?> m) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> e : m.entrySet()) result.put(String.valueOf(e.getKey()), e.getValue());
+        return result;
+    }
+
+    private static String toJson(Object o) {
+        try {
+            return ObjectMapperHolder.MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(o);
+        } catch (Exception e) {
+            return String.valueOf(o);
+        }
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) return "";
+        return s.length() <= max ? s : s.substring(0, max) + "...";
+    }
+
+    private static Map<String, Object> chatEvent(String content) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("type", "chat");
+        m.put("content", content);
+        return m;
+    }
+
+    static String randomHex(int n) {
+        byte[] bytes = new byte[(n + 1) / 2];
+        RANDOM.nextBytes(bytes);
+        StringBuilder sb = new StringBuilder();
+        for (byte b : bytes) sb.append(String.format("%02x", b));
+        return sb.substring(0, n);
+    }
 }
 
 
 // ============================================================
 // InformationFlow — 信息流（持久化）
 // ============================================================
+
+
 
 class InformationFlow {
 
@@ -379,6 +571,18 @@ class InformationFlow {
                         lines.add(IND + IND + IND + "[" + ts + "] ❌ " + fullResult);
                         break;
                     }
+                    case "task_summary": {
+                        lines.add(IND + IND + IND + "[" + ts + "] 📋 " + result);
+                        break;
+                    }
+                    case "async_callback": {
+                        String taskId = main_agent.str(detail.get("task_id"));
+                        String resultStr = toJson(detail.get("result"));
+                        String display = inRetain ? resultStr : shrink(resultStr, 200);
+                        lines.add(IND + IND + IND + "[" + ts + "] 📨 [task=" + taskId + "]");
+                        lines.add(indentBlock(display, 4));
+                        break;
+                    }
                     default: {
                         if (!result.isEmpty()) {
                             lines.add(IND + IND + IND + "[" + ts + "] 📊 " + result);
@@ -510,21 +714,76 @@ class LLMOutputParser {
 
     private ContentBlock extractContentBlock(String raw) {
         ContentBlock cb = new ContentBlock();
-        java.util.regex.Pattern p = java.util.regex.Pattern.compile(
-            "@@CONTENT@@\\s*\\n?([\\s\\S]*?)(?:@@END_CONTENT@@|$)"
-        );
-        java.util.regex.Matcher m = p.matcher(raw);
-        if (m.find()) {
-            String content = m.group(1).trim();
-            if (!content.isEmpty()) {
-                cb.contentBlock = content;
-                cb.cleaned = raw.substring(0, m.start()) + raw.substring(m.end());
-                return cb;
+
+        // 1. 先找 JSON 结束位置
+        int jsonEnd = findJsonEnd(raw);
+
+        // 2. 从 jsonEnd 之后找 @@CONTENT@@
+        int searchFrom = jsonEnd;
+        if (searchFrom < 0) {
+            // JSON 不完整，从最后一个 } 后找
+            int lastBrace = raw.lastIndexOf('}');
+            searchFrom = lastBrace >= 0 ? lastBrace + 1 : 0;
+        }
+
+        int startIdx = raw.indexOf("@@CONTENT@@", searchFrom);
+        if (startIdx < 0) {
+            cb.contentBlock = null;
+            cb.cleaned = raw;
+            return cb;
+        }
+
+        // 3. 找起始标记后的第一个换行
+        int contentStart = raw.indexOf('\n', startIdx);
+        if (contentStart < 0) {
+            cb.contentBlock = null;
+            cb.cleaned = raw;
+            return cb;
+        }
+        contentStart++;
+
+        // 4. 找结束标记
+        int endIdx = raw.indexOf("@@END_CONTENT@@", contentStart);
+        String content;
+        String cleaned;
+        if (endIdx < 0) {
+            content = raw.substring(contentStart).trim();
+            cleaned = raw.substring(0, startIdx).trim();
+        } else {
+            content = raw.substring(contentStart, endIdx).trim();
+            cleaned = raw.substring(0, startIdx).trim() + raw.substring(endIdx + "@@END_CONTENT@@".length());
+        }
+
+        if (content.isEmpty()) {
+            cb.contentBlock = null;
+            cb.cleaned = raw;
+            return cb;
+        }
+
+        cb.contentBlock = content;
+        cb.cleaned = cleaned;
+        return cb;
+    }
+
+    private int findJsonEnd(String raw) {
+        int start = raw.indexOf('{');
+        if (start < 0) return -1;
+
+        int depth = 0;
+        boolean inString = false, escape = false;
+        for (int i = start; i < raw.length(); i++) {
+            char ch = raw.charAt(i);
+            if (escape) { escape = false; continue; }
+            if (ch == '\\') { escape = true; continue; }
+            if (ch == '"') { inString = !inString; continue; }
+            if (inString) continue;
+            if (ch == '{') depth++;
+            else if (ch == '}') {
+                depth--;
+                if (depth == 0) return i + 1;
             }
         }
-        cb.contentBlock = null;
-        cb.cleaned = raw;
-        return cb;
+        return -1;
     }
 
     private boolean hasJsonIntent(String raw) {
@@ -919,11 +1178,12 @@ class FastValidator {
 // CoreProcessor — 核心处理循环
 // ============================================================
 
+
+
 class CoreProcessor {
 
     private final LLMOutputParser parser = new LLMOutputParser();
 
-    // 熔断阈值
     private static final int THINK_MAX_CHARS = 1600;
     private static final long MAX_STREAM_TIME_MS = 240_000L;
 
@@ -938,7 +1198,6 @@ class CoreProcessor {
             return reply("处理步骤过多，请简化需求后重试", false);
         }
 
-        // ★ 每轮开始：推"思考中"
         pushEvent(agent, sessionId, progressEvent("thinking", "第 " + (depth + 1) + " 轮推理"));
 
         String raw;
@@ -956,6 +1215,7 @@ class CoreProcessor {
             Map<String, Object> detail = new LinkedHashMap<>();
             detail.put("error", errorMsg);
             flow.appendSystem("validation_error", "输出格式错误，请重新输出", detail, 5);
+            pushEvent(agent, sessionId, wsErrorEvent("⚠️ 格式错误，重试中: " + reason));
             return processInternal(agent, sessionId, flow, depth + 1);
         }
 
@@ -966,6 +1226,7 @@ class CoreProcessor {
             Map<String, Object> detail = new LinkedHashMap<>();
             detail.put("error", reason);
             flow.appendSystem("validation_error", "输出格式错误，请重新输出", detail, 5);
+            pushEvent(agent, sessionId, wsErrorEvent("⚠️ 校验失败，重试中: " + reason));
             return processInternal(agent, sessionId, flow, depth + 1);
         }
 
@@ -996,16 +1257,39 @@ class CoreProcessor {
                 return reply(c, false);
             }
 
+            // ★ create_tool / fix_tool → 异步
+            if ("builtins/tools/create_tool".equals(target) ||
+                "builtins/tools/fix_tool".equals(target)) {
+
+                String callId = main_agent.randomHex(8);
+
+                Map<String, Object> startDetail = new LinkedHashMap<>();
+                startDetail.put("call_id", callId);
+                startDetail.put("target", target);
+                startDetail.put("status", "processing");
+                flow.appendSystem("call_start", "📤 提交异步任务: " + target, startDetail, retain);
+
+                Object paramsObj = args.get("params");
+                Map<String, Object> params = paramsObj instanceof Map
+                    ? castMap((Map<?, ?>) paramsObj) : new LinkedHashMap<>();
+                String desc = main_agent.str(params.get("name"));
+                if (desc.isEmpty()) desc = main_agent.str(params.get("target"));
+                if (desc.isEmpty()) desc = target;
+
+                pushEvent(agent, sessionId, progressEvent("executing", "⚡ 正在后台执行 " + target + "..."));
+
+                main_agent.submitAsyncTool(agent, sessionId, target, args, desc);
+
+                return reply("收到，正在后台处理「" + desc + "」，完成后通知你。", false);
+            }
+
+            // 其他工具：同步
             executeTool(agent, sessionId, flow, target, args, retain);
             return processInternal(agent, sessionId, flow, depth + 1);
         }
 
         return reply("未知 call: " + call, false);
     }
-
-    // ============================================================
-    // think — 流式 + 三层熔断
-    // ============================================================
 
     private String think(Agent agent, InformationFlow flow,
                          String sessionId, int depth) throws Exception {
@@ -1039,15 +1323,13 @@ class CoreProcessor {
                 tokenCount[0]++;
                 String raw = buffer.toString();
 
-                // -------- 熔断 1：单次调用超时 --------
                 if (System.currentTimeMillis() - startTime > MAX_STREAM_TIME_MS) {
                     interrupted.set(true);
                     interruptReason.set("单次调用超时");
-                    pushEvent(agent, sid, wsErrorEvent("⚠️ 生成超时（" + (MAX_STREAM_TIME_MS / 1000) + "s），已中断，正在重试..."));
+                    pushEvent(agent, sid, wsErrorEvent("⚠️ 生成超时，已中断，正在重试..."));
                     return;
                 }
 
-                // -------- 熔断 2：think 字段过长 --------
                 if (raw.contains("\"think\"") && !raw.contains("\"call\"")) {
                     int thinkStart = raw.indexOf("\"think\"");
                     if (thinkStart >= 0 && raw.length() - thinkStart > THINK_MAX_CHARS) {
@@ -1058,11 +1340,9 @@ class CoreProcessor {
                     }
                 }
 
-                // -------- 熔断 3：检测多个 JSON --------
                 String beforeContent = raw.contains("@@CONTENT@@")
                     ? raw.substring(0, raw.indexOf("@@CONTENT@@")) : raw;
 
-                // 早检测：} 后紧跟 {
                 if (beforeContent.matches("(?s).*}\\s*\\{.*")) {
                     interrupted.set(true);
                     interruptReason.set("检测到多个 JSON 对象");
@@ -1070,18 +1350,16 @@ class CoreProcessor {
                     return;
                 }
 
-                // 中检测：每 5 token 扫一次完整顶层对象
                 if (tokenCount[0] % 5 == 0 && countChar(beforeContent, '{') >= 2) {
                     int jsonCount = countJsonObjects(beforeContent);
                     if (jsonCount >= 2) {
                         interrupted.set(true);
                         interruptReason.set("检测到多个 JSON 对象");
-                        pushEvent(agent, sid, wsErrorEvent("⚠️ 检测到异常输出（" + jsonCount + " 个 JSON），已中断，正在重试..."));
+                        pushEvent(agent, sid, wsErrorEvent("⚠️ 检测到 " + jsonCount + " 个 JSON，已中断，正在重试..."));
                         return;
                     }
                 }
 
-                // 正常推流
                 pushEvent(agent, sid, streamEvent("summary_stream", delta));
             }
 
@@ -1090,7 +1368,6 @@ class CoreProcessor {
             }
         });
 
-        // ★ 熔断 → 返回 _retry JSON
         if (interrupted.get()) {
             Map<String, Object> retry = new LinkedHashMap<>();
             retry.put("think", "输出违规，需要重试");
@@ -1128,10 +1405,6 @@ class CoreProcessor {
         }
     }
 
-    // ============================================================
-    // executeTool
-    // ============================================================
-
     private void executeTool(Agent agent, String sessionId, InformationFlow flow,
                              String target, Map<String, Object> args, int retain) {
         String toolAction = main_agent.str(args.get("action"));
@@ -1139,7 +1412,7 @@ class CoreProcessor {
         Map<String, Object> toolParams = paramsObj instanceof Map
             ? castMap((Map<?, ?>) paramsObj) : new LinkedHashMap<>();
 
-        String callId = randomHex(8);
+        String callId = main_agent.randomHex(8);
 
         Map<String, Object> startDetail = new LinkedHashMap<>();
         startDetail.put("call_id", callId);
@@ -1149,7 +1422,6 @@ class CoreProcessor {
         startDetail.put("status", "pending");
         flow.appendSystem("call_start", "📤 调用工具: " + target, startDetail, retain);
 
-        // ★ 推"执行中"
         pushEvent(agent, sessionId, progressEvent("executing", "⚡ 正在 " + target + "..."));
 
         Envelop env = new Envelop("builtins/agents/main_agent", target);
@@ -1171,7 +1443,6 @@ class CoreProcessor {
                 ? result.payload : new LinkedHashMap<>());
             flow.appendSystem("call_end", "📨 调用完成: " + target, endDetail, retain);
 
-            // ★ 推"完成"
             pushEvent(agent, sessionId, progressEvent("done", "✅ " + target + " 完成"));
         } catch (Exception e) {
             Map<String, Object> errDetail = new LinkedHashMap<>();
@@ -1180,16 +1451,12 @@ class CoreProcessor {
             errDetail.put("error", e.getMessage());
             flow.appendSystem("call_error", "❌ 调用失败: " + target, errDetail, retain);
 
-            // ★ 推"错误"
             pushEvent(agent, sessionId, wsErrorEvent("❌ " + target + " 失败: " + e.getMessage()));
         }
     }
 
-    // ============================================================
-    // WS 推送
-    // ============================================================
-
-    private void pushEvent(Agent agent, String sessionId, Map<String, Object> data) {
+    // ★★★ pushEvent 改成 public static ★★★
+    public static void pushEvent(Agent agent, String sessionId, Map<String, Object> data) {
         try {
             Envelop env = new Envelop("builtins/agents/main_agent", "os/_websocket");
             env.payload.put("action", "push");
@@ -1205,7 +1472,7 @@ class CoreProcessor {
         m.put("step", step);
         m.put("agent_type", "main");
         m.put("msg", msg);
-        m.put("message", msg);   // ★ 双写，兼容前端
+        m.put("message", msg);
         return m;
     }
 
@@ -1223,17 +1490,12 @@ class CoreProcessor {
         return m;
     }
 
-    // ============================================================
-    // 熔断检测辅助
-    // ============================================================
-
     private static int countChar(String s, char c) {
         int n = 0;
         for (int i = 0; i < s.length(); i++) if (s.charAt(i) == c) n++;
         return n;
     }
 
-    /** 检测 raw 里有几个含 call/think/args 的完整 JSON 对象 */
     private static int countJsonObjects(String raw) {
         int count = 0;
         int i = 0;
@@ -1266,10 +1528,6 @@ class CoreProcessor {
         return count;
     }
 
-    // ============================================================
-    // reply / buildRetryMessage / castMap / randomHex
-    // ============================================================
-
     private Map<String, Object> reply(String content, boolean waiting) {
         Map<String, Object> r = new LinkedHashMap<>();
         r.put("ok", true);
@@ -1282,29 +1540,19 @@ class CoreProcessor {
 
     private String buildRetryMessage(String reason) {
         if (reason.contains("多个 JSON")) {
-            return "❌ 你上一轮输出了多个 JSON 对象，系统只执行了第一个，已中断生成。\n\n" +
-                "【规则】每轮只能输出 1 个 JSON。\n" +
-                "【怎么办】如果需要多个操作，请分多轮：本轮输出第 1 个，执行完下一轮再输出第 2 个。\n" +
-                "【示例】本轮只输出：\n" +
-                "  {\"think\":\"先读README\",\"call\":\"use_tool\",\"retain\":3,\"args\":{\"target\":\"os/file_utils_api\",\"action\":\"read_file\",\"params\":{\"path\":\"README.md\"}}}";
+            return "❌ 你上一轮输出了多个 JSON 对象，系统只执行了第一个。每轮只能输出 1 个 JSON。";
         }
         if (reason.contains("think 过长")) {
-            return "❌ 你上一轮的 think 字段过长（超过 1600 字符），系统已中断生成。\n\n" +
-                "【think 是什么】一句话说明\"下一步做什么、为什么\"，不是内心戏。\n" +
-                "【怎么改】控制在 100 字以内。\n" +
-                "【正确示例】\"用户要分析项目结构，我先列目录\"\n" +
-                "请重新输出，think 控制在 100 字以内。";
+            return "❌ think 字段过长（超过 1600 字符）。think 控制在 100 字以内。";
         }
         if (reason.contains("单次调用超时")) {
-            return "❌ 单次 LLM 调用超过 240 秒，系统已中断。\n" +
-                "请简化输出，或直接回复用户当前进展。";
+            return "❌ 单次 LLM 调用超过 240 秒，已中断。";
         }
         if (reason.contains("JSON 缺少 call")) {
-            return "❌ 输出的 JSON 缺少 call 字段。\n" +
-                "【正确格式】{\"think\":\"...\",\"call\":\"use_tool\",\"retain\":3,\"args\":{...}}";
+            return "❌ JSON 缺少 call 字段。";
         }
         if (reason.contains("JSON 解析失败")) {
-            return "❌ JSON 解析失败。\n【常见原因】括号不闭合、字符串未转义、多个 JSON。";
+            return "❌ JSON 解析失败：括号不闭合 / 字符串未转义 / 多个 JSON。";
         }
         if (reason.contains("缺少") || reason.contains("需要")) {
             return "❌ " + reason;
@@ -1317,14 +1565,6 @@ class CoreProcessor {
         Map<String, Object> result = new LinkedHashMap<>();
         for (Map.Entry<?, ?> e : m.entrySet()) result.put(String.valueOf(e.getKey()), e.getValue());
         return result;
-    }
-
-    private static String randomHex(int n) {
-        byte[] bytes = new byte[(n + 1) / 2];
-        new java.security.SecureRandom().nextBytes(bytes);
-        StringBuilder sb = new StringBuilder();
-        for (byte b : bytes) sb.append(String.format("%02x", b));
-        return sb.substring(0, n);
     }
 }
 

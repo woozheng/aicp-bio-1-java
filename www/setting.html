@@ -181,6 +181,13 @@ input::placeholder,textarea::placeholder{color:#555}
                     <label>external_url</label><input id="cfgWsUrl" placeholder="ws://127.0.0.1:9001/ws">
                 </div>
             </div>
+            <div class="card">
+                <div class="card-title"><span class="left">📤 上传</span></div>
+                <div class="form-row">
+                    <label>external_url</label>
+                    <input id="cfgUploadUrl" placeholder="http://127.0.0.1:9002/upload">
+                </div>
+            </div>
 
             <div class="card">
                 <div class="card-title"><span class="left">🔐 认证</span></div>
@@ -380,6 +387,8 @@ async function loadEngineConfig(){
         document.getElementById('cfgTokens').value = (config.tokens || []).join('\n');
         document.getElementById('cfgStudioToken').value = config.studio_token || '';
         document.getElementById('cfgSessionId').value = config.session_id || '';
+        document.getElementById('cfgUploadUrl').value =
+            (config.upload || {}).external_url || 'http://127.0.0.1:9002/upload';
     } catch(e) { console.error(e); }
 }
 
@@ -394,7 +403,9 @@ async function saveEngineConfig(){
         enable_auth: document.getElementById('cfgEnableAuth').value === 'true',
         tokens: document.getElementById('cfgTokens').value.split('\n').map(s=>s.trim()).filter(Boolean),
         studio_token: document.getElementById('cfgStudioToken').value,
+        upload: { external_url: document.getElementById('cfgUploadUrl').value },
         session_id: document.getElementById('cfgSessionId').value
+
     };
     for (const [key, value] of Object.entries(updates)) {
         await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key,value})});
