@@ -1685,12 +1685,56 @@ class PromptManager {
           "args": {"target":"builtins/agents/contract_agent","action":"get","params":{"plugin":"插件全路径"}}
         }
 
-        cogitor（系统地图，action 在顶层）：
+        cogitor（系统地图 + 能力搜索，action 在顶层）
+
+        ★ 探索系统时，优先用 search（模糊搜），找不到再用 list_plugins（看全貌）。
+
+        **search**（模糊搜索能力，支持多词，推荐首选）：
         {
-          "think": "我需要看系统有哪些插件",
+          "think": "我不确定系统有没有X能力，先模糊搜一下",
+          "call": "use_tool",
+          "retain": 5,
+          "args": {"target":"builtins/agents/cogitor","action":"search","params":{"terms":["关键词1","关键词2"],"limit":10}}
+        }
+
+        参数说明：
+        - terms：词列表，可传多个同义词（如 ["股票", "stock", "stk"]）
+        - query：（可选）替代 terms，传字符串，系统会按空格/标点自动拆词
+        - limit：（可选）返回数量，默认 10
+        - mode：（可选）any 任一命中（默认）| all 全部命中
+
+        返回字段：
+        - results[]：每条含 name / desc / score / matched_terms / match_detail / desc_matched
+        - match_detail：每个词匹配在哪（name / desc），用于判断"是靠名字还是靠描述命中的"
+        - desc_matched：描述里的命中片段，用于判断"上下文是否真的相关"
+
+        使用建议：
+        - 不确定确切名字时，先 search 拿候选，再决定调哪个
+        - 搜中文搜不到时，加英文同义词（如 ["股票","stock"]）
+        - 如果 search 返回空，再用 list_plugins 看全貌
+
+        **list_plugins**（看系统全貌，无参数时返回分组概览）：
+        {
+          "think": "search 找不到，我看看系统全貌",
           "call": "use_tool",
           "retain": 3,
           "args": {"target":"builtins/agents/cogitor","action":"list_plugins","params":{}}
+        }
+
+        **list_plugins**（看某个分类的完整列表）：
+        {
+          "think": "我要看 applications 分类下的所有插件",
+          "call": "use_tool",
+          "retain": 3,
+          "args": {"target":"builtins/agents/cogitor","action":"list_plugins","params":{"category":"applications"}}
+        }
+
+        **get_map**（系统概览 + 前端列表）：
+        {
+          "think": "我需要看系统整体概览",
+          "call": "use_tool",
+          "retain": 3,
+          "args": {"target":"builtins/agents/cogitor","action":"get_map","params":{}}
         }
 
         capabilities（Agent 能力发现，action 在顶层）：
@@ -1881,6 +1925,10 @@ class PromptManager {
               - 不要自己在后端插件里塞 HTML 字符串
               - 不要用 file_utils_api 写 www/ 下的 HTML
         1. 上方高频工具覆盖 → 直接调用
+        1.5 【探索系统能力】不确定系统有没有某个能力时：
+            - 先用 cogitor.search（模糊搜，支持多词）
+            - search 返回空 → cogitor.list_plugins（看全貌）
+            - 找到候选 → 用 contract_agent.get 查契约确认参数
         2. 高频工具但不确定 action → 先 contract_agent.get 查契约，看支持哪些 action
         3. 低频工具或未知插件 → contract_agent.get 查契约（同一插件只查一次）
         4. 用户的需求大任务 → 先和用户确认需求，达成一致后 create_tool
