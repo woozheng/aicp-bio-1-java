@@ -3,7 +3,6 @@ import com.aicp.core.Envelop;
 import com.aicp.core.Plugin;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -16,6 +15,7 @@ import java.util.concurrent.*;
 public class task_manager implements Plugin {
 
     static final Path TASKS_DIR = Path.of("data", "memories", "main_agent", "tasks");
+    static final Path FLOWS_BASE = Path.of("data", "memories", "main_agent", "flows");
     static final int MAX_CONCURRENT_TASKS = 5;
     static final int TASK_TIMEOUT_SECONDS = 600;
 
@@ -134,6 +134,32 @@ public class task_manager implements Plugin {
         return String.join("\n", lines);
     }
 
+    /**
+     * 删除指定的 flow 文件，返回删除数量
+     */
+    static int deleteFlowFiles(List<String> taskIds) {
+        if (!Files.exists(FLOWS_BASE)) return 0;
+        int deleted = 0;
+        try {
+            List<Path> dateDirs = new ArrayList<>();
+            try (var stream = Files.list(FLOWS_BASE)) {
+                stream.filter(Files::isDirectory).forEach(dateDirs::add);
+            }
+            for (Path dateDir : dateDirs) {
+                for (String tid : taskIds) {
+                    Path flowFile = dateDir.resolve(tid + ".json");
+                    if (Files.exists(flowFile)) {
+                        try {
+                            Files.delete(flowFile);
+                            deleted++;
+                        } catch (Exception ignored) {}
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return deleted;
+    }
+
     // ============================================================
     // WS 推送
     // ============================================================
@@ -208,9 +234,45 @@ public class task_manager implements Plugin {
         return result;
     }
 
+    static Map<String, Object> handleSend(Agent agent, Map<String, Object> params, String sessionId) {
+        String taskId = str(params.get("task_id")).trim();
+        String message = str(params.get("message")).trim();
+
+        if (taskId.isEmpty() || message.isEmpty()) {
+            return Map.of("ok", false, "think", "缺少 task_id 或 message");
+        }
+
+        Map<String, Map<String, Object>> tasks = loadTasks(sessionId);
+        Map<String, Object> t = tasks.get(taskId);
+        if (t == null) return Map.of("ok", false, "think", "任务不存在: " + taskId);
+
+        // 状态改回 running
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("status", "running");
+        patch.put("finished_at", null);
+        patch.put("error", null);
+        updateTask(sessionId, taskId, patch);
+
+        final String finalTaskId = taskId;
+        EXECUTOR.submit(() -> runSubTask(agent, sessionId, finalTaskId, message));
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("task_id", taskId);
+        data.put("status", "running");
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("ok", true);
+        result.put("think",
+            "✅ 已发送到 " + taskId + "，分身将带着记忆继续。"
+            + "任务在后台执行，完成后会自动回调你。"
+            + "⚠️ 不要轮询，等回调即可。");
+        result.put("data", data);
+        result.put("_summary", formatSummary(sessionId));
+        return result;
+    }
+
     static void runSubTask(Agent agent, String parentSession, String taskId, String taskText) {
         try {
-            // ★ 推「开始执行」
             pushEvent(agent, parentSession, "executing", "⚡ 分身 " + taskId + " 开始执行");
 
             Envelop env = new Envelop("builtins/tools/task_manager", "builtins/agents/main_agent");
@@ -277,7 +339,6 @@ public class task_manager implements Plugin {
 
             agent.call(callback);
 
-            // ★ 推前端：任务完成
             pushEvent(agent, parentSession, "done", "✅ 分身 " + taskId + " 完成");
 
         } catch (Exception ignored) {}
@@ -329,32 +390,7 @@ public class task_manager implements Plugin {
         return r;
     }
 
-    static Map<String, Object> handleCancel(Agent agent, Map<String, Object> params, String sessionId) {
-        String taskId = str(params.get("task_id"));
-        if (taskId.isEmpty()) return Map.of("ok", false, "think", "缺少 task_id");
 
-        Map<String, Map<String, Object>> tasks = loadTasks(sessionId);
-        Map<String, Object> t = tasks.get(taskId);
-        if (t == null) return Map.of("ok", false, "think", "任务不存在: " + taskId);
-
-        if (!"running".equals(str(t.get("status")))) {
-            return Map.of("ok", false, "think",
-                "任务 " + taskId + " 已结束（" + str(t.get("status")) + "），无法取消");
-        }
-
-        Map<String, Object> patch = new LinkedHashMap<>();
-        patch.put("status", "cancelled");
-        patch.put("error", "被调用方取消");
-        patch.put("finished_at", now());
-        updateTask(sessionId, taskId, patch);
-
-        Map<String, Object> r = new LinkedHashMap<>();
-        r.put("ok", true);
-        r.put("think", "任务 " + taskId + " 已标记取消");
-        r.put("data", Map.of("task_id", taskId));
-        r.put("_summary", formatSummary(sessionId));
-        return r;
-    }
 
     static Map<String, Object> handleCollect(Agent agent, Map<String, Object> params, String sessionId) {
         String taskId = str(params.get("task_id"));
@@ -438,26 +474,103 @@ public class task_manager implements Plugin {
         synchronized (lockFor(sessionId)) {
             Map<String, Map<String, Object>> tasks = loadTasks(sessionId);
             Map<String, Map<String, Object>> kept = new LinkedHashMap<>();
+            List<String> removedTids = new ArrayList<>();
+
             for (Map.Entry<String, Map<String, Object>> e : tasks.entrySet()) {
-                if ("running".equals(str(e.getValue().get("status")))) kept.put(e.getKey(), e.getValue());
+                String status = str(e.getValue().get("status"));
+                if ("running".equals(status) || "pending".equals(status)) {
+                    kept.put(e.getKey(), e.getValue());
+                } else {
+                    removedTids.add(e.getKey());
+                }
             }
-            int removed = tasks.size() - kept.size();
+
+            int removed = removedTids.size();
             saveTasks(sessionId, kept);
+
+            // ★ 删除已结束分身的 flow 文件
+            int deletedFlows = deleteFlowFiles(removedTids);
 
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("removed", removed);
+            data.put("deleted_flows", deletedFlows);
             data.put("kept", kept.size());
 
             Map<String, Object> r = new LinkedHashMap<>();
             r.put("ok", true);
-            r.put("think", "已清空 " + removed + " 个已结束任务");
+            r.put("think", "已清空 " + removed + " 个已结束任务（含 " + deletedFlows + " 个 flow 文件）");
             r.put("data", data);
 
-            // ★ 推前端：清理完成
-            pushEvent(agent, sessionId, "done", "清理分身任务：" + removed + " 个");
+            pushEvent(agent, sessionId, "done",
+                "清理分身：" + removed + " 个记录，" + deletedFlows + " 个 flow");
 
             return r;
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    static Map<String, Object> handleDelete(Agent agent, Map<String, Object> params, String sessionId) {
+        List<String> taskIds = new ArrayList<>();
+
+        Object taskIdsObj = params.get("task_ids");
+        if (taskIdsObj instanceof List<?> list) {
+            for (Object o : list) {
+                if (o != null) taskIds.add(o.toString());
+            }
+        }
+
+        // 兼容单个 task_id
+        if (taskIds.isEmpty()) {
+            String single = str(params.get("task_id")).trim();
+            if (!single.isEmpty()) taskIds.add(single);
+        }
+
+        if (taskIds.isEmpty()) {
+            return Map.of("ok", false, "think", "缺少 task_ids 或 task_id");
+        }
+
+        Map<String, Map<String, Object>> tasks = loadTasks(sessionId);
+        List<String> deleted = new ArrayList<>();
+        List<Map<String, Object>> skipped = new ArrayList<>();
+
+        for (String rawTid : taskIds) {
+            String tid = rawTid.trim();
+            if (tid.isEmpty()) continue;
+
+            if (!tasks.containsKey(tid)) {
+                skipped.add(Map.of("task_id", tid, "reason", "不存在"));
+                continue;
+            }
+
+            if ("running".equals(str(tasks.get(tid).get("status")))) {
+                skipped.add(Map.of("task_id", tid, "reason", "正在运行，不能删除"));
+                continue;
+            }
+
+            tasks.remove(tid);
+            deleted.add(tid);
+        }
+
+        saveTasks(sessionId, tasks);
+
+        // ★ 删除对应的 flow 文件
+        int deletedFlows = deleteFlowFiles(deleted);
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("deleted", deleted);
+        data.put("deleted_flows", deletedFlows);
+        data.put("skipped", skipped);
+
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("ok", true);
+        r.put("think", "已删除 " + deleted.size() + " 个分身（含 " + deletedFlows + " 个 flow 文件）");
+        r.put("data", data);
+        r.put("_summary", formatSummary(sessionId));
+
+        pushEvent(agent, sessionId, "done",
+            "删除分身：" + deleted.size() + " 个记录，" + deletedFlows + " 个 flow");
+
+        return r;
     }
 
     // ============================================================
@@ -520,11 +633,12 @@ public class task_manager implements Plugin {
         try {
             switch (action) {
                 case "create":  result = handleCreate(agent, params, sessionId); break;
+                case "send":    result = handleSend(agent, params, sessionId); break;
                 case "list":    result = handleList(agent, params, sessionId); break;
                 case "status":  result = handleStatus(agent, params, sessionId); break;
-                case "cancel":  result = handleCancel(agent, params, sessionId); break;
                 case "collect": result = handleCollect(agent, params, sessionId); break;
                 case "clear":   result = handleClear(agent, params, sessionId); break;
+                case "delete":  result = handleDelete(agent, params, sessionId); break;
                 default:
                     envelop.payload = Map.of("ok", false, "error", "未知 action: " + action);
                     return envelop;

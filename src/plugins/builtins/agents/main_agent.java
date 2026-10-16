@@ -1860,31 +1860,57 @@ class PromptManager {
 
         task_manager（分身任务，action 在顶层）：
 
-        单个分身：
+        创建分身（自动分配 session，异步跑，完成后回调）：
         {
-          "think": "这个任务可以并行，我派个分身",
-          "call": "use_tool",
-          "retain": 3,
-          "args": {"target":"builtins/tools/task_manager","action":"create","params":{"description":"简述","task":"完整任务描述"}}
+        "think": "这个任务可以并行，我派个分身",
+        "call": "use_tool",
+        "retain": 3,
+        "args": {"target":"builtins/tools/task_manager","action":"create","params":{"description":"简述","task":"完整任务描述"}}
+        }
+
+        给已有分身发消息（续跑/改进，保留分身记忆——分身结果不满意、没干完、想深入时用，不要 create 新分身）：
+        {
+        "think": "分身没干完，让它带着记忆继续",
+        "call": "use_tool",
+        "retain": 3,
+        "args": {"target":"builtins/tools/task_manager","action":"send","params":{"task_id":"sub_xxx","message":"改进要求或新目标"}}
         }
 
         查看所有分身：
         {
-          "think": "看看分身跑得怎么样",
-          "call": "use_tool",
-          "retain": 3,
-          "args": {"target":"builtins/tools/task_manager","action":"list","params":{}}
+        "think": "看看分身跑得怎么样",
+        "call": "use_tool",
+        "retain": 3,
+        "args": {"target":"builtins/tools/task_manager","action":"list","params":{}}
         }
 
         收集结果：
         {
-          "think": "收集分身结果",
-          "call": "use_tool",
-          "retain": 3,
-          "args": {"target":"builtins/tools/task_manager","action":"collect","params":{}}
+        "think": "收集分身结果",
+        "call": "use_tool",
+        "retain": 3,
+        "args": {"target":"builtins/tools/task_manager","action":"collect","params":{}}
+        }
+
+        删除指定分身（含 flow，单个或多个）：
+        {
+        "think": "这个分身跑偏了，删掉",
+        "call": "use_tool",
+        "retain": 3,
+        "args": {"target":"builtins/tools/task_manager","action":"delete","params":{"task_ids":["sub_xxx"]}}
+        }
+
+        批量清理已结束的分身（含 flow）：
+        {
+        "think": "任务周期结束，清理所有已结束的分身",
+        "call": "use_tool",
+        "retain": 2,
+        "args": {"target":"builtins/tools/task_manager","action":"clear","params":{}}
         }
 
         ⚠️ 分身创建后不要重复创建，等回调。分身在独立 session 里跑，不能再调 task_manager。
+        ⚠️ 让分身“继续/改进/深入”用 send，不要 create——create 会丢失分身的记忆。
+        ⚠️ 单个/几个不要了用 delete，全部结束用 clear。
 
         skill_loader（技能加载，action 在顶层）：
 
