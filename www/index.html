@@ -82,9 +82,6 @@
             line-height:1.6;
             color:#cbd5e1;
             padding:8px 8px 12px;
-            display:flex;
-            flex-direction:column;
-            gap:6px;
         }
         .flow-body .flow-empty{color:#555;text-align:center;padding:20px 0;font-size:11px}
 
@@ -200,7 +197,7 @@
 
         .state-modal-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
         .state-modal-overlay.show{display:flex}
-        .state-modal{background:rgba(20,20,40,0.98);border:1px solid rgba(233,69,96,0.3);border-radius:12px;width:90%;max-width:720px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.6)}
+    .state-modal{background:rgba(20,20,40,0.98);border:1px solid rgba(233,69,96,0.3);border-radius:12px;width:90%;max-width:720px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.6);overflow:hidden}
         .state-modal-header{display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid rgba(255,255,255,0.06);font-size:14px;font-weight:600;color:#e0e0e0}
         .state-modal-actions{display:flex;gap:8px}
         .state-modal-actions button{padding:5px 14px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:transparent;color:#e0e0e0;cursor:pointer;font-size:12px;font-family:inherit;transition:0.15s}
@@ -303,6 +300,60 @@
         .day-item.switching {
     background: rgba(245, 158, 11, 0.15);
     border-color: rgba(245, 158, 11, 0.3);
+}
+
+.flow-turn {
+    margin-bottom: 8px;
+    background: rgba(255,255,255,0.02);
+    border-radius: 8px;
+    overflow: hidden;
+    border-left: 3px solid #4a90d9;
+}
+
+.flow-turn-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: background 0.15s;
+    user-select: none;
+}
+
+.flow-turn-header:hover {
+    background: rgba(255,255,255,0.04);
+}
+
+.flow-turn-icon {
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.flow-turn-text {
+    flex: 1;
+    font-size: 12px;
+    color: #cbd5e1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.flow-turn-meta {
+    font-size: 10px;
+    color: #666;
+    flex-shrink: 0;
+}
+
+.flow-turn-toggle {
+    font-size: 10px;
+    color: #888;
+    flex-shrink: 0;
+}
+
+.flow-turn-body {
+    padding: 4px 8px 8px 8px;
+    background: rgba(0,0,0,0.15);
+    border-top: 1px solid rgba(255,255,255,0.04);
 }
     </style>
 </head>
@@ -1999,12 +2050,114 @@ function appendFlowEntries(entries) {
         box.scrollTop = box.scrollHeight;
     }
 }
+// 全局状态
+var flowTree = [];       // 树结构
+var turnSeen = {};       // 去重
+var turnCount = 0;
+var expandedTurns = {};  // 哪些 turn 是展开的
+var flowInitialized = false;
 
-// 从后端拉 flow（增量）
+// 构建树（增量）
+function appendFlowToTree(entries) {
+    for (var i = 0; i < entries.length; i++) {
+        var entry = entries[i];
+        var key = _flowKey(entry);
+        if (turnSeen[key]) continue;
+        turnSeen[key] = true;
+
+        if (entry.from === 'user') {
+            // 新 turn
+            var turn = {
+                id: 'turn_' + turnCount,
+                userInput: entry.content || '',
+                startTime: entry.timestamp || '',
+                endTime: entry.timestamp || '',
+                children: [],
+            };
+            flowTree.push(turn);
+            turnCount++;
+        } else {
+            // 归到当前 turn
+            if (flowTree.length === 0) {
+                // 系统启动阶段
+                flowTree.push({
+                    id: 'turn_system',
+                    userInput: '(系统启动)',
+                    startTime: entry.timestamp || '',
+                    endTime: entry.timestamp || '',
+                    children: [],
+                    isSystem: true,
+                });
+            }
+            var currentTurn = flowTree[flowTree.length - 1];
+            currentTurn.children.push(entry);
+            currentTurn.endTime = entry.timestamp || currentTurn.endTime;
+        }
+    }
+}
+
+// 渲染树
+function renderFlowTree() {
+    var box = document.getElementById('flowView');
+    if (flowTree.length === 0) {
+        box.innerHTML = '<div class="flow-empty">暂无信息流</div>';
+        return;
+    }
+
+    var html = '';
+    for (var i = 0; i < flowTree.length; i++) {
+        var turn = flowTree[i];
+        html += renderTurn(turn);
+    }
+    box.innerHTML = html;
+}
+
+function renderTurn(turn) {
+    var isExpanded = expandedTurns[turn.id] || false;
+    var duration = '';
+    if (turn.startTime && turn.endTime) {
+        var start = new Date(turn.startTime).getTime();
+        var end = new Date(turn.endTime).getTime();
+        var ms = end - start;
+        if (ms < 1000) duration = ms + 'ms';
+        else if (ms < 60000) duration = (ms / 1000).toFixed(1) + 's';
+        else duration = (ms / 60000).toFixed(1) + 'm';
+    }
+
+    var stepCount = turn.children.length;
+
+    var html = '<div class="flow-turn">';
+    html += '  <div class="flow-turn-header" onclick="toggleTurn(\'' + turn.id + '\')">';
+    html += '    <span class="flow-turn-icon">' + (turn.isSystem ? '⚙️' : '👤') + '</span>';
+    html += '    <span class="flow-turn-text">' + _flowEsc(turn.userInput.slice(0, 80)) + (turn.userInput.length > 80 ? '...' : '') + '</span>';
+    html += '    <span class="flow-turn-meta">' + stepCount + ' 步';
+    if (duration) html += ' · ' + duration;
+    html += '</span>';
+    html += '    <span class="flow-turn-toggle">' + (isExpanded ? '▲' : '▼') + '</span>';
+    html += '  </div>';
+
+    if (isExpanded) {
+        html += '<div class="flow-turn-body">';
+        for (var j = 0; j < turn.children.length; j++) {
+            html += _renderFlowItem(turn.children[j]);
+        }
+        html += '</div>';
+    }
+
+    html += '</div>';
+    return html;
+}
+
+function toggleTurn(turnId) {
+    expandedTurns[turnId] = !expandedTurns[turnId];
+    renderFlowTree();
+}
+
+// 重写 loadFlow
 async function loadFlow() {
     var box = document.getElementById('flowView');
 
-    if (!flowInitialized && flowCount === 0) {
+    if (!flowInitialized) {
         box.innerHTML = '<div class="flow-empty">加载中...</div>';
     }
 
@@ -2019,7 +2172,9 @@ async function loadFlow() {
         });
         var data = await res.json();
         if (data.ok && data.flow) {
-            appendFlowEntries(data.flow);
+            appendFlowToTree(data.flow);
+            renderFlowTree();
+            flowInitialized = true;
         } else if (!flowInitialized) {
             box.innerHTML = '<div class="flow-empty">加载失败: ' + (data.error || '未知') + '</div>';
         }
